@@ -21,92 +21,72 @@ JPX400_TICKERS = [
     "4301","4302","4401","4402","4403","4502","4503","4504","4506","4507",
     "4601","4602","4661","4662","4663","4751","4755","4901","4902","4911",
     "5001","5002","5019","5101","5108","5201","5202","5214","5301","5332",
-    "5333","5401","5402","5406","5411","5412","5541","5542","5631","5703",
-    "5706","5711","5713","5714","5715","5801","5802","5803","5901","5938",
-    "6098","6103","6104","6113","6146","6178","6273","6301","6302","6305",
-    "6306","6361","6367","6383","6412","6417","6471","6472","6473","6481",
-    "6501","6503","6504","6506","6532","6541","6586","6594","6645","6657",
-    "6674","6701","6702","6703","6723","6724","6752","6753","6758","6762",
-    "6767","6770","6773","6807","6841","6857","6861","6902","6952","6954",
-    "6971","6981","6988","7003","7004","7011","7013","7201","7202","7203",
-    "7205","7211","7261","7267","7269","7270","7272","7731","7733","7735",
-    "7741","7751","7752","7762","7832","7911","7912","7951","7974","8001",
-    "8002","8003","8008","8011","8015","8031","8035","8036","8053","8058",
-    "8097","8113","8114","8233","8252","8267","8301","8304","8306","8308",
-    "8309","8316","8331","8354","8355","8377","8411","8473","8591","8601",
-    "8604","8628","8630","8697","8725","8729","8750","8766","8795","8801",
-    "8802","8803","8804","8830","9001","9005","9007","9008","9009","9020",
-    "9021","9022","9064","9101","9104","9107","9201","9202","9301","9432",
-    "9433","9434","9501","9502","9503","9531","9532","9602","9613","9619",
-    "9633","9684","9697","9735","9766","9983","9984",
+    "5333","5401","5402","5406","5411","5412","5541","5631","5703","5706",
+    "5711","5713","5714","5715","5801","5802","5803","5901","5938","6098",
+    "6103","6113","6146","6178","6273","6301","6302","6305","6306","6361",
+    "6367","6383","6412","6417","6471","6472","6473","6481","6501","6503",
+    "6504","6506","6532","6541","6586","6594","6645","6657","6674","6701",
+    "6702","6703","6723","6724","6752","6753","6758","6762","6767","6770",
+    "6773","6807","6841","6857","6861","6902","6952","6954","6971","6981",
+    "6988","7003","7004","7011","7013","7201","7202","7203","7205","7211",
+    "7261","7267","7269","7270","7272","7731","7733","7735","7741","7751",
+    "7752","7762","7832","7911","7912","7951","7974","8001","8002","8003",
+    "8008","8011","8015","8031","8035","8036","8053","8058","8097","8113",
+    "8114","8233","8252","8267","8301","8304","8306","8308","8309","8316",
+    "8331","8354","8355","8377","8411","8473","8591","8601","8604","8628",
+    "8630","8697","8725","8729","8750","8766","8795","8801","8802","8803",
+    "8804","8830","9001","9005","9007","9008","9009","9020","9021","9022",
+    "9064","9101","9104","9107","9201","9202","9301","9432","9433","9434",
+    "9501","9502","9503","9531","9532","9602","9613","9619","9633","9684",
+    "9697","9735","9766","9983","9984",
 ]
 JPX400_TICKERS = list(dict.fromkeys(JPX400_TICKERS))
-
-def normalize_return(arr):
-    rets = []
-    for i in range(1, len(arr)):
-        prev = arr[i-1]
-        rets.append((arr[i] - prev) / prev if prev != 0 else 0)
-    return np.array(rets)
-
-def cosine_sim(a, b):
-    length = min(len(a), len(b))
-    a, b = a[:length], b[:length]
-    dot = np.dot(a, b)
-    na, nb = np.linalg.norm(a), np.linalg.norm(b)
-    return dot / (na * nb) if na > 0 and nb > 0 else 0
 
 def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50
     deltas = np.diff(prices)
-    gains = np.where(deltas > 0, deltas, 0)
-    losses = np.where(deltas < 0, -deltas, 0)
+    gains = np.where(deltas > 0, deltas, 0).astype(float)
+    losses = np.where(deltas < 0, -deltas, 0).astype(float)
     ag = np.mean(gains[:period])
     al = np.mean(losses[:period])
     for i in range(period, len(deltas)):
         ag = (ag * (period-1) + gains[i]) / period
         al = (al * (period-1) + losses[i]) / period
-    return 100 if al == 0 else 100 - 100 / (1 + ag/al)
+    return 100 if al == 0 else float(100 - 100 / (1 + ag/al))
 
 def fetch_and_analyze(ticker):
     try:
-        df = yf.download(f"{ticker}.T", period="10y", progress=False, auto_adjust=True)
+        t = f"{ticker}.T"
+        df = yf.download(t, period="10y", progress=False, auto_adjust=True)
         if df is None or len(df) < 100:
             return None
+
+        # yfinanceのバージョン差異を吸収
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
         df = df.dropna(subset=["Close"])
-        closes = df["Close"].values.flatten()
-        highs = df["High"].values.flatten()
-        lows = df["Low"].values.flatten()
-        vols = df["Volume"].values.flatten()
+        if len(df) < 100:
+            return None
+
+        closes = df["Close"].astype(float).values
         N = len(closes)
 
         rsi = calc_rsi(closes)
         ma200 = float(np.mean(closes[-200:])) if N >= 200 else float(np.mean(closes))
         latest_close = float(closes[-1])
 
-        # 直近20日の騰落率パターン（ブラウザ側で任意windowに対応するため長めに保存）
-        pattern_window = 20
-        recent_returns = []
-        if N >= pattern_window + 1:
-            seg = closes[-(pattern_window+1):]
-            for i in range(1, len(seg)):
-                recent_returns.append(round(float((seg[i]-seg[i-1])/seg[i-1]*100), 4))
-
-        # 過去全データの日次リターンを保存（ブラウザ側でマッチング計算）
-        all_closes = [round(float(c), 2) for c in closes]
-
         return {
             "ticker": ticker,
-            "rsi": round(float(rsi), 1),
+            "rsi": round(rsi, 1),
             "ma200": round(ma200, 2),
             "latest_close": round(latest_close, 2),
-            "above_ma200": latest_close > ma200,
-            "closes": all_closes,
-            "recent_returns": recent_returns,
+            "above_ma200": bool(latest_close > ma200),
+            "closes": [round(float(c), 2) for c in closes],
         }
     except Exception as e:
-        print(f"  エラー: {e}")
+        print(f"  エラー: {ticker} - {e}")
         return None
 
 def main():
@@ -120,7 +100,9 @@ def main():
         result = fetch_and_analyze(ticker)
         if result:
             all_results.append(result)
-            print(f"  → OK RSI={result['rsi']} 終値={result['latest_close']}")
+            print(f"  -> OK RSI={result['rsi']} 終値={result['latest_close']}")
+        else:
+            print(f"  -> スキップ")
 
     run_time = datetime.now().strftime("%Y-%m-%d %H:%M JST")
     output = {
@@ -131,19 +113,24 @@ def main():
     with open("docs/data.json", "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False)
 
-    print(f"\n完了: {len(all_results)}銘柄のデータを docs/data.json に保存しました")
-
-    # シンプルなindex.htmlも生成
-    html = f"""<!DOCTYPE html>
-<html lang="ja">
-<head><meta charset="UTF-8"><meta http-equiv="refresh" content="0;url=screener.html">
-<title>JPX400 スクリーナー</title></head>
-<body><p>リダイレクト中...</p></body>
-</html>"""
+    # index.htmlはdata.jsonへのリンクページ
     with open("docs/index.html", "w", encoding="utf-8") as f:
-        f.write(html)
+        f.write(f"""<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8">
+<title>JPX400 スクリーナー</title>
+<style>body{{font-family:sans-serif;padding:2rem;background:#f5f5f0}}
+.card{{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.5rem;max-width:500px}}
+a{{color:#378ADD}}</style></head>
+<body><div class="card">
+<h2>📊 JPX400 スクリーナー</h2>
+<p style="color:#666;margin:.5rem 0">更新: {run_time}</p>
+<p style="margin:.5rem 0">取得銘柄数: <strong>{len(all_results)}銘柄</strong></p>
+<p style="margin-top:1rem"><a href="data.json" download>⬇ data.json をダウンロード</a></p>
+<p style="font-size:12px;color:#999;margin-top:1rem">
+ダウンロード後、screener_ui.html に読み込んでください。</p>
+</div></body></html>""")
 
-    print("docs/index.html (リダイレクト) を生成しました")
+    print(f"\n完了: {len(all_results)}銘柄 -> docs/data.json")
 
 if __name__ == "__main__":
     main()
