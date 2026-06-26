@@ -2,7 +2,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
 
 # JPX400構成銘柄（2025年8月29日適用版・公式リストより）
@@ -104,7 +104,8 @@ def main():
         else:
             print(f"  -> スキップ")
 
-    run_time = datetime.now().strftime("%Y-%m-%d %H:%M JST")
+    JST = timezone(timedelta(hours=9))
+    run_time = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     output = {
         "run_time": run_time,
         "ticker_count": len(all_results),
