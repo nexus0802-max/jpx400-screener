@@ -5,7 +5,6 @@ import json
 from datetime import datetime, timezone, timedelta
 import os
 
-# JPX400構成銘柄（2025年8月29日適用版・公式リストより）
 JPX400_TICKERS = [
     "1332","1414","1419","1518","1605","1662","1719","1721","1801","1802",
     "1808","1812","1878","1911","1925","1928","1942","1951","1959","1969",
@@ -64,33 +63,82 @@ def calc_rsi(prices, period=14):
 
 def fetch_and_analyze(ticker):
     try:
-        df = yf.download(f"{ticker}.T", period="10y", progress=False, auto_adjust=True)
-        if df is None or len(df) < 100:
+        t = f"{ticker}.T"
+        df = yf.download(t, period="2y", progress=False, auto_adjust=True)
+        if df is None or len(df) < 120:
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         df = df.dropna(subset=["Close"])
-        if len(df) < 100:
+        if len(df) < 120:
             return None
+
         closes = df["Close"].astype(float).values
+        volumes = df["Volume"].astype(float).values
         N = len(closes)
+
+        # 移動平均
+        ma20  = float(np.mean(closes[-20:]))
+        ma50  = float(np.mean(closes[-50:]))
+        ma100 = float(np.mean(closes[-100:]))
+
+        # 移動平均の傾き（右肩上がり判定）
+        ma20_slope  = float(np.mean(closes[-20:]) - np.mean(closes[-25:-5]))
+        ma50_slope  = float(np.mean(closes[-50:]) - np.mean(closes[-60:-10]))
+        ma100_slope = float(np.mean(closes[-100:]) - np.mean(closes[-110:-10]))
+
+        # 平均出来高（20日）
+        avg_vol20 = float(np.mean(volumes[-20:]))
+
+        # 52週高値
+        weeks52 = min(252, N)
+        high52w = float(np.max(closes[-weeks52:]))
+
+        # 最新株価
+        latest = float(closes[-1])
+
+        # 時価総額（株数取得）
+        info = yf.Ticker(t).fast_info
+        shares = getattr(info, 'shares', None)
+        market_cap = float(shares * latest) if shares else None
+
+        # 直近1ヶ月の値幅（持ち合い判定）
+        month_closes = closes[-21:]
+        month_high = float(np.max(month_closes))
+        month_low = float(np.min(month_closes))
+        month_range_pct = (month_high - month_low) / month_low * 100 if month_low > 0 else 999
+
+        # RSI
         rsi = calc_rsi(closes)
+
+        # MA200（パターンスクリーナー用）
         ma200 = float(np.mean(closes[-200:])) if N >= 200 else float(np.mean(closes))
-        latest_close = float(closes[-1])
+
         return {
             "ticker": ticker,
+            "latest": round(latest, 2),
+            "ma20": round(ma20, 2),
+            "ma50": round(ma50, 2),
+            "ma100": round(ma100, 2),
+            "ma20_slope": round(ma20_slope, 4),
+            "ma50_slope": round(ma50_slope, 4),
+            "ma100_slope": round(ma100_slope, 4),
+            "avg_vol20": round(avg_vol20, 0),
+            "high52w": round(high52w, 2),
+            "market_cap": round(market_cap / 1e8, 1) if market_cap else None,  # 億円
+            "month_range_pct": round(month_range_pct, 2),
             "rsi": round(rsi, 1),
             "ma200": round(ma200, 2),
-            "latest_close": round(latest_close, 2),
-            "above_ma200": bool(latest_close > ma200),
-            "closes": [round(float(c), 2) for c in closes],
+            "above_ma200": bool(latest > ma200),
+            "closes": [round(float(c), 2) for c in closes[-120:]],  # 直近120日分
         }
     except Exception as e:
         print(f"  エラー: {ticker} - {e}")
         return None
 
 def main():
-    print(f"データ取得開始: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    JST = timezone(timedelta(hours=9))
+    print(f"データ取得開始: {datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S JST')}")
     os.makedirs("docs", exist_ok=True)
     all_results = []
     total = len(JPX400_TICKERS)
@@ -100,11 +148,10 @@ def main():
         result = fetch_and_analyze(ticker)
         if result:
             all_results.append(result)
-            print(f"  -> OK RSI={result['rsi']} 終値={result['latest_close']}")
+            print(f"  -> OK RSI={result['rsi']} 終値={result['latest']}")
         else:
             print(f"  -> スキップ")
 
-    JST = timezone(timedelta(hours=9))
     run_time = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     output = {
         "run_time": run_time,
@@ -120,12 +167,12 @@ def main():
 <title>JPX400 スクリーナー</title>
 <style>body{{font-family:sans-serif;padding:2rem;background:#f5f5f0}}
 .card{{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.5rem;max-width:500px}}
-a{{color:#378ADD}}</style></head>
+a{{color:#378ADD;display:block;margin:.5rem 0;font-size:15px}}</style></head>
 <body><div class="card">
 <h2>📊 JPX400 スクリーナー</h2>
-<p style="color:#666;margin:.5rem 0">更新: {run_time}</p>
-<p style="margin:.5rem 0">取得銘柄数: <strong>{len(all_results)}銘柄</strong></p>
-<p style="margin-top:1rem"><a href="screener.html">▶ スクリーナーを開く</a></p>
+<p style="color:#666;margin:.5rem 0 1rem">更新: {run_time} / {len(all_results)}銘柄</p>
+<a href="screener.html">▶ パターンマッチング スクリーナー</a>
+<a href="swing.html">▶ スイングトレード スクリーナー</a>
 </div></body></html>""")
 
     print(f"\n完了: {len(all_results)}銘柄 -> docs/data.json")
