@@ -64,7 +64,7 @@ def calc_rsi(prices, period=14):
 def fetch_and_analyze(ticker):
     try:
         t = f"{ticker}.T"
-        df = yf.download(t, period="2y", progress=False, auto_adjust=True)
+        df = yf.download(t, period="10y", progress=False, auto_adjust=True)
         if df is None or len(df) < 120:
             return None
         if isinstance(df.columns, pd.MultiIndex):
