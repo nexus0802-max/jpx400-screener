@@ -130,7 +130,7 @@ def fetch_and_analyze(ticker):
             "rsi": round(rsi, 1),
             "ma200": round(ma200, 2),
             "above_ma200": bool(latest > ma200),
-            "closes": [round(float(c), 2) for c in closes[-120:]],  # 直近120日分
+            "closes": [round(float(c), 2) for c in closes],
         }
     except Exception as e:
         print(f"  エラー: {ticker} - {e}")
