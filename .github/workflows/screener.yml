@@ -25,9 +25,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git stash
-          git pull origin main --rebase
-          git stash pop
           git add docs/data.json docs/index.html
           git diff --staged --quiet || git commit -m "update"
-          git push origin main
+          git push origin HEAD:main --force
