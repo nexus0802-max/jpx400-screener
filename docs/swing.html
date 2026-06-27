@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>JPX400 スイングトレード スクリーナー</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;background:#f5f5f0;color:#1a1a1a;font-size:15px}
+.wrap{max-width:1100px;margin:0 auto;padding:1.5rem 1rem}
+h1{font-size:20px;font-weight:600;margin-bottom:1.5rem}
+.card{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.25rem 1.5rem;margin-bottom:1.25rem}
+h2{font-size:15px;font-weight:600;margin-bottom:1rem}
+.status-bar{font-size:13px;padding:.6rem 1rem;border-radius:8px;margin-bottom:1rem}
+.ok{background:#e8f5e0;color:#2d6a0a}
+.err{background:#fce8e8;color:#a32d2d}
+.loading{background:#f0f0f0;color:#666}
+.conditions{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:1rem}
+.cond{background:#f8f8f8;border-radius:8px;padding:.75rem 1rem;border:1px solid #ebebeb}
+.cond-label{font-size:11px;color:#888;margin-bottom:4px;font-weight:500;text-transform:uppercase;letter-spacing:.04em}
+.cond-val{font-size:18px;font-weight:600;color:#1a1a1a;margin-bottom:4px}
+input[type=range]{width:100%;accent-color:#378ADD}
+input[type=number]{width:100%;font-size:14px;padding:4px 6px;border:1px solid #ddd;border-radius:6px;margin-top:4px}
+.checks{display:flex;flex-direction:column;gap:8px;margin-bottom:1rem}
+.checks label{font-size:13px;display:flex;align-items:center;gap:8px;cursor:pointer;padding:.5rem .75rem;background:#f8f8f8;border-radius:8px;border:1px solid #ebebeb}
+.checks label input{accent-color:#378ADD}
+.run-btn{width:100%;padding:.7rem;font-size:15px;font-weight:600;background:#1a1a1a;color:#fff;border:none;border-radius:8px;cursor:pointer}
+.run-btn:hover{opacity:.85}
+.run-btn:disabled{background:#bbb;cursor:not-allowed}
+.status{font-size:13px;color:#666;margin-top:.5rem}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1rem}
+.chip{font-size:12px;background:#f0f0f0;padding:3px 12px;border-radius:20px;color:#555}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{font-size:11px;font-weight:600;color:#888;text-align:left;padding:7px 10px;border-bottom:1px solid #e5e5e5;text-transform:uppercase;white-space:nowrap}
+tbody tr:hover{background:#fafafa}
+tbody td{padding:8px 10px;border-bottom:1px solid #f0f0f0}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:5px;font-weight:600}
+.up{background:#e8f5e0;color:#2d6a0a}
+.dn{background:#fce8e8;color:#a32d2d}
+.neu{background:#f0f0f0;color:#666}
+.empty{text-align:center;padding:3rem;color:#aaa;font-size:14px}
+.warn{font-size:12px;color:#999;margin-top:1rem;padding-top:.75rem;border-top:1px solid #f0f0f0;line-height:1.7}
+.check-icon{font-size:12px;padding:2px 6px;border-radius:4px;font-weight:600}
+.pass{background:#e8f5e0;color:#2d6a0a}
+.fail{background:#fce8e8;color:#a32d2d}
+.back-link{font-size:13px;color:#378ADD;text-decoration:none;display:inline-block;margin-bottom:1rem}
+</style>
+</head>
+<body>
+<div class="wrap">
+<a href="index.html" class="back-link">← トップへ戻る</a>
+<h1>📈 スイングトレード スクリーナー</h1>
+
+<div id="statusBar" class="card status-bar loading">⏳ データを読み込み中...</div>
+
+<div class="card">
+  <h2>⚙️ スクリーニング条件</h2>
+  <div class="conditions">
+    <div class="cond">
+      <div class="cond-label">平均出来高（万株以上）</div>
+      <div class="cond-val" id="vol-val">20</div>
+      <input type="range" min="1" max="100" value="20" id="volMin" oninput="document.getElementById('vol-val').textContent=this.value">
+    </div>
+    <div class="cond">
+      <div class="cond-label">時価総額（億円以上）</div>
+      <div class="cond-val" id="cap-val">500</div>
+      <input type="range" min="100" max="5000" step="100" value="500" id="capMin" oninput="document.getElementById('cap-val').textContent=this.value">
+    </div>
+    <div class="cond">
+      <div class="cond-label">52週高値まで（%以内）</div>
+      <div class="cond-val" id="h52-val">5</div>
+      <input type="range" min="1" max="20" value="5" id="h52Max" oninput="document.getElementById('h52-val').textContent=this.value">
+    </div>
+    <div class="cond">
+      <div class="cond-label">直近1ヶ月値幅（%以内）</div>
+      <div class="cond-val" id="range-val">8</div>
+      <input type="range" min="2" max="30" value="8" id="rangeMax" oninput="document.getElementById('range-val').textContent=this.value">
+    </div>
+  </div>
+
+  <div class="checks">
+    <label><input type="checkbox" id="chkMA" checked>
+      株価 &gt; MA20 &gt; MA50 &gt; MA100（パーフェクトオーダー）</label>
+    <label><input type="checkbox" id="chkSlope" checked>
+      全移動平均線が右肩上がり（MA20・MA50・MA100の傾きがプラス）</label>
+    <label><input type="checkbox" id="chkVol" checked>
+      平均出来高 20万株以上</label>
+    <label><input type="checkbox" id="chkCap" checked>
+      時価総額 500億円以上</label>
+    <label><input type="checkbox" id="chkH52" checked>
+      52週高値まで5%以内</label>
+    <label><input type="checkbox" id="chkRange" checked>
+      直近1ヶ月は高値圏で持ち合い（値幅8%以内）</label>
+  </div>
+
+  <button class="run-btn" id="runBtn" disabled onclick="runScreen()">▶ スクリーニング実行</button>
+  <div class="status" id="statusText"></div>
+</div>
+
+<div class="card" id="resultCard" style="display:none">
+  <div class="chips" id="chips"></div>
+  <div style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th>#</th><th>銘柄</th><th>株価</th><th>MA20</th><th>MA50</th><th>MA100</th>
+        <th>出来高(万株)</th><th>時価総額(億)</th><th>52週高値比</th><th>1ヶ月値幅</th><th>RSI</th>
+        <th>PO</th><th>傾き</th>
+      </tr></thead>
+      <tbody id="resultTb"></tbody>
+    </table>
+  </div>
+  <p class="warn">⚠️ 過去データの統計分析です。将来の値動きを保証するものではありません。投資判断はご自身の責任で。</p>
+</div>
+
+<div id="emptyCard" class="card empty" style="display:none">
+  <div style="font-size:36px;margin-bottom:.5rem">🔍</div>
+  <p>条件に合う銘柄が見つかりませんでした。<br>条件を緩めて再実行してください。</p>
+</div>
+</div>
+
+<script>
+let rawData = null;
+
+async function loadData() {
+  const bar = document.getElementById('statusBar');
+  try {
+    const res = await fetch('data.json?t=' + Date.now());
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    rawData = await res.json();
+    if (!rawData.data || rawData.data.length === 0) throw new Error('データが空です');
+    // スイング条件に必要なフィールドチェック
+    if (!rawData.data[0].ma20) throw new Error('データが古い形式です。screener.pyを更新してください。');
+    bar.className = 'card status-bar ok';
+    bar.textContent = `✅ ${rawData.ticker_count}銘柄 読み込み完了（更新: ${rawData.run_time}）`;
+    document.getElementById('runBtn').disabled = false;
+  } catch(e) {
+    bar.className = 'card status-bar err';
+    bar.textContent = `❌ ${e.message}`;
+  }
+}
+loadData();
+
+function runScreen() {
+  if (!rawData) return;
+  const volMin  = +document.getElementById('volMin').value * 10000;
+  const capMin  = +document.getElementById('capMin').value;
+  const h52Max  = +document.getElementById('h52Max').value;
+  const rangeMax= +document.getElementById('rangeMax').value;
+  const chkMA   = document.getElementById('chkMA').checked;
+  const chkSlope= document.getElementById('chkSlope').checked;
+  const chkVol  = document.getElementById('chkVol').checked;
+  const chkCap  = document.getElementById('chkCap').checked;
+  const chkH52  = document.getElementById('chkH52').checked;
+  const chkRange= document.getElementById('chkRange').checked;
+
+  document.getElementById('runBtn').disabled = true;
+  document.getElementById('resultCard').style.display = 'none';
+  document.getElementById('emptyCard').style.display = 'none';
+
+  const results = [];
+  for (const d of rawData.data) {
+    // パーフェクトオーダー
+    const isPO = d.latest > d.ma20 && d.ma20 > d.ma50 && d.ma50 > d.ma100;
+    // 全MA右肩上がり
+    const isSlope = d.ma20_slope > 0 && d.ma50_slope > 0 && d.ma100_slope > 0;
+    // 出来高
+    const isVol = d.avg_vol20 >= volMin;
+    // 時価総額
+    const isCap = d.market_cap !== null && d.market_cap >= capMin;
+    // 52週高値まで
+    const h52pct = d.high52w > 0 ? (d.high52w - d.latest) / d.high52w * 100 : 999;
+    const isH52 = h52pct <= h52Max;
+    // 持ち合い
+    const isRange = d.month_range_pct <= rangeMax;
+
+    if (chkMA && !isPO) continue;
+    if (chkSlope && !isSlope) continue;
+    if (chkVol && !isVol) continue;
+    if (chkCap && !isCap) continue;
+    if (chkH52 && !isH52) continue;
+    if (chkRange && !isRange) continue;
+
+    results.push({ ...d, isPO, isSlope, isVol, isCap, isH52, isRange, h52pct });
+  }
+
+  // 52週高値に近い順にソート
+  results.sort((a, b) => a.h52pct - b.h52pct);
+
+  document.getElementById('runBtn').disabled = false;
+  document.getElementById('statusText').textContent =
+    `✅ 完了: ${results.length}銘柄が条件を満たしました`;
+
+  if (!results.length) {
+    document.getElementById('emptyCard').style.display = 'block';
+    return;
+  }
+
+  document.getElementById('chips').innerHTML = [
+    `<span class="chip">更新: ${rawData.run_time}</span>`,
+    `<span class="chip">対象: ${rawData.ticker_count}銘柄</span>`,
+    `<span class="chip">該当: ${results.length}銘柄</span>`,
+  ].join('');
+
+  const chk = (v) => v
+    ? '<span class="check-icon pass">✓</span>'
+    : '<span class="check-icon fail">✗</span>';
+
+  document.getElementById('resultTb').innerHTML = results.map((r, i) => `<tr>
+    <td style="color:#aaa">${i+1}</td>
+    <td style="font-weight:600">${r.ticker}</td>
+    <td>${r.latest.toLocaleString()}</td>
+    <td style="color:#666">${r.ma20.toLocaleString()}</td>
+    <td style="color:#666">${r.ma50.toLocaleString()}</td>
+    <td style="color:#666">${r.ma100.toLocaleString()}</td>
+    <td>${r.avg_vol20 ? (r.avg_vol20/10000).toFixed(1) : '-'}</td>
+    <td>${r.market_cap !== null ? r.market_cap.toLocaleString() : '-'}</td>
+    <td>${r.h52pct.toFixed(1)}%</td>
+    <td>${r.month_range_pct.toFixed(1)}%</td>
+    <td>${r.rsi}</td>
+    <td>${chk(r.isPO)}</td>
+    <td>${chk(r.isSlope)}</td>
+  </tr>`).join('');
+
+  document.getElementById('resultCard').style.display = 'block';
+}
+</script>
+</body>
+</html>
