@@ -131,6 +131,7 @@ a{{color:#378ADD;display:block;margin:.5rem 0;font-size:15px}}</style></head>
 <p style="color:#666;margin:.5rem 0 1rem">更新: {run_time} / {len(all_results)}銘柄</p>
 <a href="screener.html">▶ パターンマッチング スクリーナー</a>
 <a href="breakout.html">▶ MA収束ブレイクアウト スクリーナー</a>
+<a href="vcp.html">▶ VCP（収縮パターン）スクリーナー</a>
 </div></body></html>""")
 
     print(f"\n完了: {len(all_results)}銘柄 -> docs/data.json")
