@@ -61,6 +61,76 @@ def calc_rsi(prices, period=14):
         al = (al * (period-1) + losses[i]) / period
     return 100 if al == 0 else float(100 - 100 / (1 + ag/al))
 
+def calc_adx_ci(highs, lows, closes, period=14, lookback=60):
+    """直近lookback本平均のADXとチョピネス指数(CI)を返す。データ不足時は(None, None)"""
+    n = len(closes)
+    if n < period * 2 + 1:
+        return None, None
+
+    tr  = np.zeros(n)
+    pdm = np.zeros(n)
+    mdm = np.zeros(n)
+    for i in range(1, n):
+        h, l, pc = highs[i], lows[i], closes[i-1]
+        ph, pl = highs[i-1], lows[i-1]
+        tr[i] = max(h - l, abs(h - pc), abs(l - pc))
+        up, down = h - ph, pl - l
+        pdm[i] = up if (up > down and up > 0) else 0
+        mdm[i] = down if (down > up and down > 0) else 0
+
+    sm_tr  = np.full(n, np.nan)
+    sm_pdm = np.full(n, np.nan)
+    sm_mdm = np.full(n, np.nan)
+    sm_tr[period]  = tr[1:period+1].sum()
+    sm_pdm[period] = pdm[1:period+1].sum()
+    sm_mdm[period] = mdm[1:period+1].sum()
+    for i in range(period + 1, n):
+        sm_tr[i]  = sm_tr[i-1]  - sm_tr[i-1]/period  + tr[i]
+        sm_pdm[i] = sm_pdm[i-1] - sm_pdm[i-1]/period + pdm[i]
+        sm_mdm[i] = sm_mdm[i-1] - sm_mdm[i-1]/period + mdm[i]
+
+    dx = np.full(n, np.nan)
+    for i in range(period, n):
+        if sm_tr[i] == 0:
+            pdi = mdi = 0.0
+        else:
+            pdi = 100 * sm_pdm[i] / sm_tr[i]
+            mdi = 100 * sm_mdm[i] / sm_tr[i]
+        s = pdi + mdi
+        dx[i] = 0 if s == 0 else 100 * abs(pdi - mdi) / s
+
+    first_adx_idx = period * 2
+    if first_adx_idx >= n:
+        return None, None
+    adx = np.full(n, np.nan)
+    adx[first_adx_idx - 1] = np.mean(dx[period:first_adx_idx])
+    for i in range(first_adx_idx, n):
+        adx[i] = (adx[i-1] * (period - 1) + dx[i]) / period
+
+    ci = np.full(n, np.nan)
+    for i in range(period, n):
+        window_tr = tr[i-period+1:i+1].sum()
+        hh = highs[i-period+1:i+1].max()
+        ll = lows[i-period+1:i+1].min()
+        rng = hh - ll
+        ci[i] = 100 * np.log10(window_tr / rng) / np.log10(period) if rng > 0 else 0
+
+    start = max(0, n - lookback)
+    adx_vals = adx[start:][~np.isnan(adx[start:])]
+    ci_vals  = ci[start:][~np.isnan(ci[start:])]
+    if len(adx_vals) == 0 or len(ci_vals) == 0:
+        return None, None
+    return float(np.mean(adx_vals)), float(np.mean(ci_vals))
+
+def classify_trend(adx, ci):
+    if adx is None or ci is None:
+        return None
+    if adx >= 25 and ci <= 50:
+        return "trend"
+    if adx < 20 and ci >= 61.8:
+        return "range"
+    return "mid"
+
 def fetch_and_analyze(ticker):
     try:
         t = f"{ticker}.T"
@@ -73,6 +143,8 @@ def fetch_and_analyze(ticker):
         if len(df) < 100:
             return None
 
+        highs   = df["High"].astype(float).values
+        lows    = df["Low"].astype(float).values
         closes  = df["Close"].astype(float).values
         volumes = df["Volume"].astype(float).values
         N = len(closes)
@@ -80,6 +152,8 @@ def fetch_and_analyze(ticker):
         rsi = calc_rsi(closes)
         ma200 = float(np.mean(closes[-200:])) if N >= 200 else float(np.mean(closes))
         latest_close = float(closes[-1])
+        adx, ci = calc_adx_ci(highs, lows, closes)
+        trend_class = classify_trend(adx, ci)
 
         return {
             "ticker": ticker,
@@ -87,6 +161,9 @@ def fetch_and_analyze(ticker):
             "ma200": round(ma200, 2),
             "latest_close": round(latest_close, 2),
             "above_ma200": bool(latest_close > ma200),
+            "adx": round(adx, 1) if adx is not None else None,
+            "ci": round(ci, 1) if ci is not None else None,
+            "trend_class": trend_class,
             "closes":  [round(float(c), 2) for c in closes],
             "volumes": [int(v) for v in volumes],
         }
@@ -132,9 +209,72 @@ a{{color:#378ADD;display:block;margin:.5rem 0;font-size:15px}}</style></head>
 <a href="screener.html">▶ パターンマッチング スクリーナー</a>
 <a href="breakout.html">▶ MA収束ブレイクアウト スクリーナー</a>
 <a href="vcp.html">▶ VCP（収縮パターン）スクリーナー</a>
+<a href="trend.html">▶ トレンド/レンジ 判定スクリーナー</a>
 </div></body></html>""")
 
+    write_trend_page()
+
     print(f"\n完了: {len(all_results)}銘柄 -> docs/data.json")
+
+def write_trend_page():
+    html = """<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8">
+<title>トレンド/レンジ 判定スクリーナー</title>
+<style>
+body{font-family:sans-serif;padding:2rem;background:#f5f5f0;color:#222}
+.card{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.5rem;max-width:900px;margin:0 auto}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:1rem}
+th{text-align:left;padding:8px 6px;border-bottom:1px solid #ccc;cursor:pointer;color:#666}
+td{padding:8px 6px;border-bottom:1px solid #eee}
+.badge{font-size:12px;padding:2px 8px;border-radius:6px}
+.trend{background:#EAF3DE;color:#27500A}
+.range{background:#FCEBEB;color:#791F1F}
+.mid{background:#F1EFE8;color:#444441}
+a.back{color:#378ADD;font-size:14px}
+</style></head>
+<body><div class="card">
+<a class="back" href="index.html">&larr; 戻る</a>
+<h2>トレンド/レンジ 判定スクリーナー</h2>
+<p style="color:#666" id="meta"></p>
+<canvas id="scatter" style="max-height:340px"></canvas>
+<table id="tbl"><thead><tr>
+<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th>
+</tr></thead><tbody></tbody></table>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const label = c => c==='trend' ? 'トレンド向き' : c==='range' ? 'レンジ・往来' : '中間';
+let sortKey='adx', sortDir=-1;
+fetch('data.json').then(r=>r.json()).then(d=>{
+  const rows = d.data.filter(r=>r.adx!=null && r.ci!=null);
+  document.getElementById('meta').textContent = `更新: ${d.run_time} / 判定対象 ${rows.length}銘柄`;
+  function render(){
+    const sorted = rows.slice().sort((a,b)=> sortKey==='ticker'||sortKey==='trend_class'
+      ? sortDir*String(a[sortKey]).localeCompare(String(b[sortKey]))
+      : sortDir*(a[sortKey]-b[sortKey]));
+    document.querySelector('#tbl tbody').innerHTML = sorted.map(r=>
+      `<tr><td>${r.ticker}</td><td>${r.adx.toFixed(1)}</td><td>${r.ci.toFixed(1)}</td>`+
+      `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td></tr>`).join('');
+  }
+  document.querySelectorAll('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
+    const k=th.dataset.k;
+    if(sortKey===k) sortDir*=-1; else {sortKey=k; sortDir = (k==='ticker'||k==='trend_class')?1:-1;}
+    render();
+  }));
+  render();
+  const colors = {trend:'#1D9E75', range:'#D85A30', mid:'#888780'};
+  new Chart(document.getElementById('scatter'), {
+    type:'scatter',
+    data:{datasets:[{label:'銘柄', data:rows.map(r=>({x:r.ci,y:r.adx,ticker:r.ticker})),
+      backgroundColor: rows.map(r=>colors[r.trend_class])}]},
+    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.raw.ticker} ADX:${c.raw.y.toFixed(1)} CI:${c.raw.x.toFixed(1)}`}}},
+      scales:{x:{title:{display:true,text:'チョピネス指数（低いほどトレンド）'}}, y:{title:{display:true,text:'ADX（高いほどトレンド）'}}}}
+  });
+});
+</script>
+</body></html>"""
+    with open("docs/trend.html", "w", encoding="utf-8") as f:
+        f.write(html)
 
 if __name__ == "__main__":
     main()
