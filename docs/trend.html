@@ -19,6 +19,12 @@ a.back{color:#378ADD;font-size:14px}
 <p style="color:#666" id="meta"></p>
 <canvas id="scatter" style="max-height:340px"></canvas>
 <div id="groupStats" style="display:flex; gap:12px; margin:1rem 0; flex-wrap:wrap;"></div>
+<h3 style="margin:1.5rem 0 .5rem;font-size:15px;">保有日数・リターンの分布（銘柄ごとの平均値、392銘柄）</h3>
+<canvas id="holdReturnScatter" style="max-height:320px"></canvas>
+<div style="display:flex; gap:16px; margin-top:1rem; flex-wrap:wrap;">
+  <div style="flex:1; min-width:280px;"><canvas id="barsHeldHist" style="max-height:260px"></canvas></div>
+  <div style="flex:1; min-width:280px;"><canvas id="returnHist" style="max-height:260px"></canvas></div>
+</div>
 <table id="tbl"><thead><tr>
 <th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th><th data-k="win_rate">勝率%</th><th data-k="avg_bars_held">平均保有日数</th><th data-k="avg_return_pct">平均リターン%</th>
 </tr></thead><tbody></tbody></table>
@@ -86,6 +92,39 @@ fetch('data.json').then(r=>r.json()).then(d=>{
     options:{plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.raw.ticker} ADX:${c.raw.y.toFixed(1)} CI:${c.raw.x.toFixed(1)}`}}},
       scales:{x:{title:{display:true,text:'チョピネス指数（低いほどトレンド）'}}, y:{title:{display:true,text:'ADX（高いほどトレンド）'}}}}
   });
+
+  // ==== 平均保有日数 × 平均リターン% の散布図 ====
+  const distRows = rows.filter(r => r.avg_bars_held!=null && r.avg_return_pct!=null);
+  new Chart(document.getElementById('holdReturnScatter'), {
+    type:'scatter',
+    data:{datasets:[{label:'銘柄', data:distRows.map(r=>({x:r.avg_bars_held,y:r.avg_return_pct,ticker:r.ticker})),
+      backgroundColor: distRows.map(r=>colors[r.trend_class])}]},
+    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.raw.ticker} 保有${c.raw.x.toFixed(1)}日 / リターン${c.raw.y.toFixed(2)}%`}}},
+      scales:{x:{title:{display:true,text:'平均保有日数'}}, y:{title:{display:true,text:'平均リターン（%）'}}}}
+  });
+
+  // ==== ヒストグラム共通関数 ====
+  function makeHistogram(canvasId, values, binCount, xTitle){
+    if (values.length === 0) return;
+    const min = Math.min(...values), max = Math.max(...values);
+    const width = (max - min) / binCount || 1;
+    const bins = new Array(binCount).fill(0);
+    values.forEach(v=>{
+      let idx = Math.floor((v - min) / width);
+      if (idx >= binCount) idx = binCount - 1;
+      if (idx < 0) idx = 0;
+      bins[idx]++;
+    });
+    const labels = bins.map((_, i)=> (min + i*width).toFixed(1));
+    new Chart(document.getElementById(canvasId), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: '銘柄数', data: bins, backgroundColor: '#378ADD' }] },
+      options: { plugins:{legend:{display:false}},
+        scales: { x: { title: { display:true, text: xTitle } }, y: { title:{ display:true, text:'銘柄数' }, ticks:{ precision:0 } } } }
+    });
+  }
+  makeHistogram('barsHeldHist', distRows.map(r=>r.avg_bars_held), 20, '平均保有日数');
+  makeHistogram('returnHist', distRows.map(r=>r.avg_return_pct), 20, '平均リターン（%）');
 });
 </script>
 </body></html>
