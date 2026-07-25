@@ -20,7 +20,7 @@ a.back{color:#378ADD;font-size:14px}
 <canvas id="scatter" style="max-height:340px"></canvas>
 <div id="groupStats" style="display:flex; gap:12px; margin:1rem 0; flex-wrap:wrap;"></div>
 <table id="tbl"><thead><tr>
-<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th>
+<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th><th data-k="win_rate">勝率%</th><th data-k="avg_bars_held">平均保有日数</th><th data-k="avg_return_pct">平均リターン%</th>
 </tr></thead><tbody></tbody></table>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -40,7 +40,10 @@ fetch('data.json').then(r=>r.json()).then(d=>{
     document.querySelector('#tbl tbody').innerHTML = sorted.map(r=>
       `<tr><td>${r.ticker}</td><td>${r.adx.toFixed(1)}</td><td>${r.ci.toFixed(1)}</td>`+
       `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td>`+
-      `<td>${r.pf!=null ? r.pf.toFixed(3) : '-'}</td><td>${r.trade_count!=null ? r.trade_count : '-'}</td></tr>`).join('');
+      `<td>${r.pf!=null ? r.pf.toFixed(3) : '-'}</td><td>${r.trade_count!=null ? r.trade_count : '-'}</td>`+
+      `<td>${r.win_rate!=null ? r.win_rate.toFixed(1) : '-'}</td>`+
+      `<td>${r.avg_bars_held!=null ? r.avg_bars_held.toFixed(1) : '-'}</td>`+
+      `<td>${r.avg_return_pct!=null ? r.avg_return_pct.toFixed(2) : '-'}</td></tr>`).join('');
   }
   document.querySelectorAll('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
     const k=th.dataset.k;
