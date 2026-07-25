@@ -132,11 +132,13 @@ def classify_trend(adx, ci):
     return "mid"
 
 def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20,
-                      body_pct=50, max_bars_after_cross=10, stop_loss_pct=8):
+                      body_pct=50, max_bars_after_cross=10, stop_loss_pct=8,
+                      min_body_to_range_pct=60):
     """
     SMA5/20戦略の簡易バックテスト（手数料0、スリッページなし）。
     エントリー: シグナル翌日の始値で約定。損切りは当日の安値で判定（成行想定）。
     利確（陰線でSMA5割れ）は終値で約定とする近似。
+    min_body_to_range_pct: 実体の大きさ÷値幅全体(高値-安値)の比率フィルター（ヒゲ主体の迷い足を除外）。
     戻り値: (PF, トレード回数)。トレードが1件もない場合は (None, 0)。
     """
     n = len(closes)
@@ -205,7 +207,10 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
                     above_pct = above_amt / body_size * 100
                 else:
                     above_pct = 0.0
-                if bullish and above_pct >= body_pct and i + 1 < n:
+                total_range = highs[i] - lows[i]
+                body_to_range_pct = (body_size / total_range * 100) if total_range > 0 else 0.0
+                if (bullish and above_pct >= body_pct
+                        and body_to_range_pct >= min_body_to_range_pct and i + 1 < n):
                     entry_price = opens[i + 1]
                     stop_price  = entry_price * (1 - stop_loss_pct / 100)
                     position = True
