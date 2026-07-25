@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8">
+<title>トレンド/レンジ 判定スクリーナー</title>
+<style>
+body{font-family:sans-serif;padding:2rem;background:#f5f5f0;color:#222}
+.card{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.5rem;max-width:900px;margin:0 auto}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:1rem}
+th{text-align:left;padding:8px 6px;border-bottom:1px solid #ccc;cursor:pointer;color:#666}
+td{padding:8px 6px;border-bottom:1px solid #eee}
+.badge{font-size:12px;padding:2px 8px;border-radius:6px}
+.trend{background:#EAF3DE;color:#27500A}
+.range{background:#FCEBEB;color:#791F1F}
+.mid{background:#F1EFE8;color:#444441}
+a.back{color:#378ADD;font-size:14px}
+</style></head>
+<body><div class="card">
+<a class="back" href="index.html">&larr; 戻る</a>
+<h2>トレンド/レンジ 判定スクリーナー</h2>
+<p style="color:#666" id="meta"></p>
+<canvas id="scatter" style="max-height:340px"></canvas>
+<table id="tbl"><thead><tr>
+<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th>
+</tr></thead><tbody></tbody></table>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const label = c => c==='trend' ? 'トレンド向き' : c==='range' ? 'レンジ・往来' : '中間';
+let sortKey='adx', sortDir=-1;
+fetch('data.json').then(r=>r.json()).then(d=>{
+  const rows = d.data.filter(r=>r.adx!=null && r.ci!=null);
+  document.getElementById('meta').textContent = `更新: ${d.run_time} / 判定対象 ${rows.length}銘柄`;
+  function render(){
+    const sorted = rows.slice().sort((a,b)=> sortKey==='ticker'||sortKey==='trend_class'
+      ? sortDir*String(a[sortKey]).localeCompare(String(b[sortKey]))
+      : sortDir*(a[sortKey]-b[sortKey]));
+    document.querySelector('#tbl tbody').innerHTML = sorted.map(r=>
+      `<tr><td>${r.ticker}</td><td>${r.adx.toFixed(1)}</td><td>${r.ci.toFixed(1)}</td>`+
+      `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td></tr>`).join('');
+  }
+  document.querySelectorAll('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
+    const k=th.dataset.k;
+    if(sortKey===k) sortDir*=-1; else {sortKey=k; sortDir = (k==='ticker'||k==='trend_class')?1:-1;}
+    render();
+  }));
+  render();
+  const colors = {trend:'#1D9E75', range:'#D85A30', mid:'#888780'};
+  new Chart(document.getElementById('scatter'), {
+    type:'scatter',
+    data:{datasets:[{label:'銘柄', data:rows.map(r=>({x:r.ci,y:r.adx,ticker:r.ticker})),
+      backgroundColor: rows.map(r=>colors[r.trend_class])}]},
+    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.raw.ticker} ADX:${c.raw.y.toFixed(1)} CI:${c.raw.x.toFixed(1)}`}}},
+      scales:{x:{title:{display:true,text:'チョピネス指数（低いほどトレンド）'}}, y:{title:{display:true,text:'ADX（高いほどトレンド）'}}}}
+  });
+});
+</script>
+</body></html>
