@@ -305,8 +305,10 @@ def fetch_and_analyze(ticker):
             "trend_class_is": trend_class_is,
             "pf_is": r2(bt_is["pf"]) if bt_is else None,
             "trades_is": bt_is["trade_count"] if bt_is else None,
+            "avg_return_pct_is": r2(bt_is["avg_return_pct"]) if bt_is else None,
             "pf_oos": r2(bt_oos["pf"]) if bt_oos else None,
             "trades_oos": bt_oos["trade_count"] if bt_oos else None,
+            "avg_return_pct_oos": r2(bt_oos["avg_return_pct"]) if bt_oos else None,
             "closes":  [round(float(c), 2) for c in closes],
             "volumes": [int(v) for v in volumes],
         }
@@ -445,6 +447,23 @@ fetch('data.json').then(r=>r.json()).then(d=>{
     `<div><div style="font-size:12px;color:#666;">それ以外の銘柄（n=${others.length}）の後半平均PF</div><div style="font-size:22px;font-weight:600;">${avgOf(others)}</div></div>`+
     `</div><div style="font-size:12px;color:#888;margin-top:.5rem;">トレード回数${MIN_TRADES}回未満の期間は除外。前半のみの情報で選定し、後半は一切参照していません。</div>`;
   document.getElementById('groupStats').after(wfDiv);
+
+  // ==== ウォークフォワード検証: 前半の平均リターン上位25% → 後半の平均リターン ====
+  const withIS = rows.filter(r => r.avg_return_pct_is!=null && r.trades_is>=MIN_TRADES
+      && r.avg_return_pct_oos!=null && r.trades_oos>=MIN_TRADES);
+  const byReturnIs = withIS.slice().sort((a,b)=> b.avg_return_pct_is - a.avg_return_pct_is);
+  const topN = Math.floor(byReturnIs.length / 4); // 上位25%
+  const topGroup = byReturnIs.slice(0, topN);
+  const restGroup = byReturnIs.slice(topN);
+  const avgOosReturn = arr => arr.length ? (arr.reduce((a,b)=>a+b.avg_return_pct_oos,0)/arr.length).toFixed(3) : '-';
+  const wfReturnDiv = document.createElement('div');
+  wfReturnDiv.style.cssText = 'margin:1.5rem 0;padding:1rem;background:#F5F5F0;border-radius:8px;';
+  wfReturnDiv.innerHTML = `<div style="font-weight:600;margin-bottom:.5rem;">ウォークフォワード検証：前半の「平均リターンが高い上位25%」を選定 → 後半期間の平均リターン</div>`+
+    `<div style="display:flex;gap:24px;flex-wrap:wrap;">`+
+    `<div><div style="font-size:12px;color:#666;">前半上位25%だった銘柄（n=${topGroup.length}）の後半平均リターン%</div><div style="font-size:22px;font-weight:600;">${avgOosReturn(topGroup)}</div></div>`+
+    `<div><div style="font-size:12px;color:#666;">それ以外の銘柄（n=${restGroup.length}）の後半平均リターン%</div><div style="font-size:22px;font-weight:600;">${avgOosReturn(restGroup)}</div></div>`+
+    `</div><div style="font-size:12px;color:#888;margin-top:.5rem;">トレード回数${MIN_TRADES}回未満の期間は除外。前半の平均リターンのみで選定し、後半は一切参照していません。</div>`;
+  wfDiv.after(wfReturnDiv);
 
   const colors = {trend:'#1D9E75', range:'#D85A30', mid:'#888780'};
   new Chart(document.getElementById('scatter'), {
