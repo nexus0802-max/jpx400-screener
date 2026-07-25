@@ -139,11 +139,15 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
     エントリー: シグナル翌日の始値で約定。損切りは当日の安値で判定（成行想定）。
     利確（陰線でSMA5割れ）は終値で約定とする近似。
     min_body_to_range_pct: 実体の大きさ÷値幅全体(高値-安値)の比率フィルター（ヒゲ主体の迷い足を除外）。
-    戻り値: (PF, トレード回数)。トレードが1件もない場合は (None, 0)。
+
+    戻り値: dict（トレードが1件もない場合は None）
+      pf, trade_count, win_rate,
+      avg_bars_held, avg_return_pct,
+      avg_bars_win, avg_bars_loss, avg_return_win, avg_return_loss
     """
     n = len(closes)
     if n < sma_slow_len + max_bars_after_cross + 5:
-        return None, 0
+        return None
 
     sma5  = pd.Series(closes).rolling(sma_fast_len).mean().values
     sma20 = pd.Series(closes).rolling(sma_slow_len).mean().values
@@ -152,10 +156,9 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
     cross_i = -1
     position = False
     entry_price = 0.0
+    entry_index = -1
     stop_price = 0.0
-    wins_sum = 0.0
-    losses_sum = 0.0
-    trade_count = 0
+    trades = []  # 各要素: (bars_held, return_pct, is_win)
 
     start = sma_slow_len
     for i in range(start, n):
@@ -173,22 +176,18 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
         if position:
             # 損切り判定（当日安値がストップ以下なら約定）
             if lows[i] <= stop_price:
-                pnl = stop_price - entry_price
-                if pnl >= 0:
-                    wins_sum += pnl
-                else:
-                    losses_sum += -pnl
-                trade_count += 1
+                exit_price = stop_price
+                bars_held = i - entry_index
+                return_pct = (exit_price / entry_price - 1) * 100
+                trades.append((bars_held, return_pct, return_pct >= 0))
                 position = False
                 continue
             bearish = closes[i] < opens[i]
             if closes[i] < sma5[i] and bearish:
-                pnl = closes[i] - entry_price
-                if pnl >= 0:
-                    wins_sum += pnl
-                else:
-                    losses_sum += -pnl
-                trade_count += 1
+                exit_price = closes[i]
+                bars_held = i - entry_index
+                return_pct = (exit_price / entry_price - 1) * 100
+                trades.append((bars_held, return_pct, return_pct >= 0))
                 position = False
                 continue
         else:
@@ -212,17 +211,39 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
                 if (bullish and above_pct >= body_pct
                         and body_to_range_pct >= min_body_to_range_pct and i + 1 < n):
                     entry_price = opens[i + 1]
+                    entry_index = i + 1
                     stop_price  = entry_price * (1 - stop_loss_pct / 100)
                     position = True
                     waiting = False
 
-    if trade_count == 0:
-        return None, 0
+    if len(trades) == 0:
+        return None
+
+    wins_sum   = sum(r for _, r, w in trades if w)
+    losses_sum = sum(-r for _, r, w in trades if not w)
+    trade_count = len(trades)
+    win_trades  = [t for t in trades if t[2]]
+    loss_trades = [t for t in trades if not t[2]]
+
     if losses_sum == 0:
         pf = None if wins_sum == 0 else 999.0  # 負けトレードが皆無の場合の便宜的な上限値
     else:
         pf = wins_sum / losses_sum
-    return pf, trade_count
+
+    def _avg(vals):
+        return float(np.mean(vals)) if len(vals) > 0 else None
+
+    return {
+        "pf": pf,
+        "trade_count": trade_count,
+        "win_rate": round(len(win_trades) / trade_count * 100, 1),
+        "avg_bars_held": _avg([t[0] for t in trades]),
+        "avg_return_pct": _avg([t[1] for t in trades]),
+        "avg_bars_win": _avg([t[0] for t in win_trades]),
+        "avg_bars_loss": _avg([t[0] for t in loss_trades]),
+        "avg_return_win": _avg([t[1] for t in win_trades]),
+        "avg_return_loss": _avg([t[1] for t in loss_trades]),
+    }
 
 def fetch_and_analyze(ticker):
     try:
@@ -248,19 +269,20 @@ def fetch_and_analyze(ticker):
         latest_close = float(closes[-1])
         adx, ci = calc_adx_ci(highs, lows, closes)
         trend_class = classify_trend(adx, ci)
-        pf, trade_count = backtest_sma5_20(opens, highs, lows, closes)
+        bt = backtest_sma5_20(opens, highs, lows, closes)
 
         # ==== ウォークフォワード検証: 前半(IS)で選定 → 後半(OOS)で検証 ====
         split = N // 2
-        pf_is = trades_is = pf_oos = trades_oos = None
+        bt_is = bt_oos = None
         trend_class_is = None
         if split >= 60 and (N - split) >= 60:
             adx_is, ci_is = calc_adx_ci(highs[:split], lows[:split], closes[:split])
             trend_class_is = classify_trend(adx_is, ci_is)
-            pf_is, trades_is = backtest_sma5_20(
-                opens[:split], highs[:split], lows[:split], closes[:split])
-            pf_oos, trades_oos = backtest_sma5_20(
-                opens[split:], highs[split:], lows[split:], closes[split:])
+            bt_is  = backtest_sma5_20(opens[:split], highs[:split], lows[:split], closes[:split])
+            bt_oos = backtest_sma5_20(opens[split:], highs[split:], lows[split:], closes[split:])
+
+        def r2(v):
+            return round(v, 3) if v is not None else None
 
         return {
             "ticker": ticker,
@@ -271,13 +293,20 @@ def fetch_and_analyze(ticker):
             "adx": round(adx, 1) if adx is not None else None,
             "ci": round(ci, 1) if ci is not None else None,
             "trend_class": trend_class,
-            "pf": round(pf, 3) if pf is not None else None,
-            "trade_count": trade_count,
+            "pf": r2(bt["pf"]) if bt else None,
+            "trade_count": bt["trade_count"] if bt else None,
+            "win_rate": bt["win_rate"] if bt else None,
+            "avg_bars_held": r2(bt["avg_bars_held"]) if bt else None,
+            "avg_return_pct": r2(bt["avg_return_pct"]) if bt else None,
+            "avg_bars_win": r2(bt["avg_bars_win"]) if bt else None,
+            "avg_bars_loss": r2(bt["avg_bars_loss"]) if bt else None,
+            "avg_return_win": r2(bt["avg_return_win"]) if bt else None,
+            "avg_return_loss": r2(bt["avg_return_loss"]) if bt else None,
             "trend_class_is": trend_class_is,
-            "pf_is": round(pf_is, 3) if pf_is is not None else None,
-            "trades_is": trades_is,
-            "pf_oos": round(pf_oos, 3) if pf_oos is not None else None,
-            "trades_oos": trades_oos,
+            "pf_is": r2(bt_is["pf"]) if bt_is else None,
+            "trades_is": bt_is["trade_count"] if bt_is else None,
+            "pf_oos": r2(bt_oos["pf"]) if bt_oos else None,
+            "trades_oos": bt_oos["trade_count"] if bt_oos else None,
             "closes":  [round(float(c), 2) for c in closes],
             "volumes": [int(v) for v in volumes],
         }
@@ -353,7 +382,7 @@ a.back{color:#378ADD;font-size:14px}
 <canvas id="scatter" style="max-height:340px"></canvas>
 <div id="groupStats" style="display:flex; gap:12px; margin:1rem 0; flex-wrap:wrap;"></div>
 <table id="tbl"><thead><tr>
-<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th>
+<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th><th data-k="win_rate">勝率%</th><th data-k="avg_bars_held">平均保有日数</th><th data-k="avg_return_pct">平均リターン%</th>
 </tr></thead><tbody></tbody></table>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -373,7 +402,10 @@ fetch('data.json').then(r=>r.json()).then(d=>{
     document.querySelector('#tbl tbody').innerHTML = sorted.map(r=>
       `<tr><td>${r.ticker}</td><td>${r.adx.toFixed(1)}</td><td>${r.ci.toFixed(1)}</td>`+
       `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td>`+
-      `<td>${r.pf!=null ? r.pf.toFixed(3) : '-'}</td><td>${r.trade_count!=null ? r.trade_count : '-'}</td></tr>`).join('');
+      `<td>${r.pf!=null ? r.pf.toFixed(3) : '-'}</td><td>${r.trade_count!=null ? r.trade_count : '-'}</td>`+
+      `<td>${r.win_rate!=null ? r.win_rate.toFixed(1) : '-'}</td>`+
+      `<td>${r.avg_bars_held!=null ? r.avg_bars_held.toFixed(1) : '-'}</td>`+
+      `<td>${r.avg_return_pct!=null ? r.avg_return_pct.toFixed(2) : '-'}</td></tr>`).join('');
   }
   document.querySelectorAll('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
     const k=th.dataset.k;
