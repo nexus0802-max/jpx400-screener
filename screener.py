@@ -245,6 +245,18 @@ def fetch_and_analyze(ticker):
         trend_class = classify_trend(adx, ci)
         pf, trade_count = backtest_sma5_20(opens, highs, lows, closes)
 
+        # ==== ウォークフォワード検証: 前半(IS)で選定 → 後半(OOS)で検証 ====
+        split = N // 2
+        pf_is = trades_is = pf_oos = trades_oos = None
+        trend_class_is = None
+        if split >= 60 and (N - split) >= 60:
+            adx_is, ci_is = calc_adx_ci(highs[:split], lows[:split], closes[:split])
+            trend_class_is = classify_trend(adx_is, ci_is)
+            pf_is, trades_is = backtest_sma5_20(
+                opens[:split], highs[:split], lows[:split], closes[:split])
+            pf_oos, trades_oos = backtest_sma5_20(
+                opens[split:], highs[split:], lows[split:], closes[split:])
+
         return {
             "ticker": ticker,
             "rsi": round(rsi, 1),
@@ -256,6 +268,11 @@ def fetch_and_analyze(ticker):
             "trend_class": trend_class,
             "pf": round(pf, 3) if pf is not None else None,
             "trade_count": trade_count,
+            "trend_class_is": trend_class_is,
+            "pf_is": round(pf_is, 3) if pf_is is not None else None,
+            "trades_is": trades_is,
+            "pf_oos": round(pf_oos, 3) if pf_oos is not None else None,
+            "trades_oos": trades_oos,
             "closes":  [round(float(c), 2) for c in closes],
             "volumes": [int(v) for v in volumes],
         }
@@ -369,6 +386,23 @@ fetch('data.json').then(r=>r.json()).then(d=>{
       `<div style="font-size:12px;color:#666;">${gLabel[k]}（n=${arr.length}）</div>`+
       `<div style="font-size:20px;font-weight:600;">平均PF ${avg}</div></div>`;
   }).join('');
+
+  // ==== ウォークフォワード検証: 前半でトレンド向き&PF>1選定 → 後半の成績 ====
+  const MIN_TRADES = 15;
+  const isSelected = rows.filter(r => r.trend_class_is==='trend' && r.pf_is!=null && r.pf_is>1
+      && r.trades_is!=null && r.trades_is>=MIN_TRADES && r.pf_oos!=null && r.trades_oos>=MIN_TRADES);
+  const others = rows.filter(r => !(r.trend_class_is==='trend' && r.pf_is!=null && r.pf_is>1)
+      && r.pf_oos!=null && r.trades_oos>=MIN_TRADES);
+  const avgOf = arr => arr.length ? (arr.reduce((a,b)=>a+b.pf_oos,0)/arr.length).toFixed(3) : '-';
+  const wfDiv = document.createElement('div');
+  wfDiv.style.cssText = 'margin:1.5rem 0;padding:1rem;background:#F5F5F0;border-radius:8px;';
+  wfDiv.innerHTML = `<div style="font-weight:600;margin-bottom:.5rem;">ウォークフォワード検証：前半データで「トレンド向き かつ PF&gt;1」を選定 → 後半期間の成績</div>`+
+    `<div style="display:flex;gap:24px;flex-wrap:wrap;">`+
+    `<div><div style="font-size:12px;color:#666;">前半で選定された銘柄（n=${isSelected.length}）の後半平均PF</div><div style="font-size:22px;font-weight:600;">${avgOf(isSelected)}</div></div>`+
+    `<div><div style="font-size:12px;color:#666;">それ以外の銘柄（n=${others.length}）の後半平均PF</div><div style="font-size:22px;font-weight:600;">${avgOf(others)}</div></div>`+
+    `</div><div style="font-size:12px;color:#888;margin-top:.5rem;">トレード回数${MIN_TRADES}回未満の期間は除外。前半のみの情報で選定し、後半は一切参照していません。</div>`;
+  document.getElementById('groupStats').after(wfDiv);
+
   const colors = {trend:'#1D9E75', range:'#D85A30', mid:'#888780'};
   new Chart(document.getElementById('scatter'), {
     type:'scatter',
