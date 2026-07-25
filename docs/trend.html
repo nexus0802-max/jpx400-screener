@@ -18,24 +18,29 @@ a.back{color:#378ADD;font-size:14px}
 <h2>トレンド/レンジ 判定スクリーナー</h2>
 <p style="color:#666" id="meta"></p>
 <canvas id="scatter" style="max-height:340px"></canvas>
+<div id="groupStats" style="display:flex; gap:12px; margin:1rem 0; flex-wrap:wrap;"></div>
 <table id="tbl"><thead><tr>
-<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th>
+<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th>
 </tr></thead><tbody></tbody></table>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 const label = c => c==='trend' ? 'トレンド向き' : c==='range' ? 'レンジ・往来' : '中間';
-let sortKey='adx', sortDir=-1;
+let sortKey='pf', sortDir=-1;
 fetch('data.json').then(r=>r.json()).then(d=>{
   const rows = d.data.filter(r=>r.adx!=null && r.ci!=null);
-  document.getElementById('meta').textContent = `更新: ${d.run_time} / 判定対象 ${rows.length}銘柄`;
+  document.getElementById('meta').textContent = `更新: ${d.run_time} / 判定対象 ${rows.length}銘柄（SMA5/20戦略PF・手数料0・損切り8%）`;
   function render(){
-    const sorted = rows.slice().sort((a,b)=> sortKey==='ticker'||sortKey==='trend_class'
-      ? sortDir*String(a[sortKey]).localeCompare(String(b[sortKey]))
-      : sortDir*(a[sortKey]-b[sortKey]));
+    const sorted = rows.slice().sort((a,b)=>{
+      if (sortKey==='ticker'||sortKey==='trend_class') return sortDir*String(a[sortKey]).localeCompare(String(b[sortKey]));
+      const av = a[sortKey]==null ? -Infinity : a[sortKey];
+      const bv = b[sortKey]==null ? -Infinity : b[sortKey];
+      return sortDir*(av-bv);
+    });
     document.querySelector('#tbl tbody').innerHTML = sorted.map(r=>
       `<tr><td>${r.ticker}</td><td>${r.adx.toFixed(1)}</td><td>${r.ci.toFixed(1)}</td>`+
-      `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td></tr>`).join('');
+      `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td>`+
+      `<td>${r.pf!=null ? r.pf.toFixed(3) : '-'}</td><td>${r.trade_count!=null ? r.trade_count : '-'}</td></tr>`).join('');
   }
   document.querySelectorAll('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
     const k=th.dataset.k;
@@ -43,6 +48,16 @@ fetch('data.json').then(r=>r.json()).then(d=>{
     render();
   }));
   render();
+  const groups = {trend:[], mid:[], range:[]};
+  rows.forEach(r=>{ if (r.pf!=null && groups[r.trend_class]) groups[r.trend_class].push(r.pf); });
+  const gLabel = {trend:'トレンド向き', mid:'中間', range:'レンジ・往来'};
+  document.getElementById('groupStats').innerHTML = Object.keys(groups).map(k=>{
+    const arr = groups[k];
+    const avg = arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(3) : '-';
+    return `<div style="background:#f5f5f0;border-radius:8px;padding:.75rem 1rem;min-width:140px;">`+
+      `<div style="font-size:12px;color:#666;">${gLabel[k]}（n=${arr.length}）</div>`+
+      `<div style="font-size:20px;font-weight:600;">平均PF ${avg}</div></div>`;
+  }).join('');
   const colors = {trend:'#1D9E75', range:'#D85A30', mid:'#888780'};
   new Chart(document.getElementById('scatter'), {
     type:'scatter',
