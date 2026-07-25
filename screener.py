@@ -131,6 +131,94 @@ def classify_trend(adx, ci):
         return "range"
     return "mid"
 
+def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20,
+                      body_pct=50, max_bars_after_cross=10, stop_loss_pct=8):
+    """
+    SMA5/20戦略の簡易バックテスト（手数料0、スリッページなし）。
+    エントリー: シグナル翌日の始値で約定。損切りは当日の安値で判定（成行想定）。
+    利確（陰線でSMA5割れ）は終値で約定とする近似。
+    戻り値: (PF, トレード回数)。トレードが1件もない場合は (None, 0)。
+    """
+    n = len(closes)
+    if n < sma_slow_len + max_bars_after_cross + 5:
+        return None, 0
+
+    sma5  = pd.Series(closes).rolling(sma_fast_len).mean().values
+    sma20 = pd.Series(closes).rolling(sma_slow_len).mean().values
+
+    waiting = False
+    cross_i = -1
+    position = False
+    entry_price = 0.0
+    stop_price = 0.0
+    wins_sum = 0.0
+    losses_sum = 0.0
+    trade_count = 0
+
+    start = sma_slow_len
+    for i in range(start, n):
+        if np.isnan(sma5[i]) or np.isnan(sma20[i]) or np.isnan(sma5[i-1]) or np.isnan(sma20[i-1]):
+            continue
+
+        golden = sma5[i-1] <= sma20[i-1] and sma5[i] > sma20[i]
+        dead   = sma5[i-1] >= sma20[i-1] and sma5[i] < sma20[i]
+        if golden:
+            waiting = True
+            cross_i = i
+        if dead:
+            waiting = False
+
+        if position:
+            # 損切り判定（当日安値がストップ以下なら約定）
+            if lows[i] <= stop_price:
+                pnl = stop_price - entry_price
+                if pnl >= 0:
+                    wins_sum += pnl
+                else:
+                    losses_sum += -pnl
+                trade_count += 1
+                position = False
+                continue
+            bearish = closes[i] < opens[i]
+            if closes[i] < sma5[i] and bearish:
+                pnl = closes[i] - entry_price
+                if pnl >= 0:
+                    wins_sum += pnl
+                else:
+                    losses_sum += -pnl
+                trade_count += 1
+                position = False
+                continue
+        else:
+            if waiting and (i - cross_i) <= max_bars_after_cross:
+                bullish = closes[i] > opens[i]
+                body_high = max(opens[i], closes[i])
+                body_low  = min(opens[i], closes[i])
+                body_size = body_high - body_low
+                if body_size > 0:
+                    if sma5[i] <= body_low:
+                        above_amt = body_size
+                    elif sma5[i] >= body_high:
+                        above_amt = 0.0
+                    else:
+                        above_amt = body_high - sma5[i]
+                    above_pct = above_amt / body_size * 100
+                else:
+                    above_pct = 0.0
+                if bullish and above_pct >= body_pct and i + 1 < n:
+                    entry_price = opens[i + 1]
+                    stop_price  = entry_price * (1 - stop_loss_pct / 100)
+                    position = True
+                    waiting = False
+
+    if trade_count == 0:
+        return None, 0
+    if losses_sum == 0:
+        pf = None if wins_sum == 0 else 999.0  # 負けトレードが皆無の場合の便宜的な上限値
+    else:
+        pf = wins_sum / losses_sum
+    return pf, trade_count
+
 def fetch_and_analyze(ticker):
     try:
         t = f"{ticker}.T"
@@ -143,6 +231,7 @@ def fetch_and_analyze(ticker):
         if len(df) < 100:
             return None
 
+        opens   = df["Open"].astype(float).values
         highs   = df["High"].astype(float).values
         lows    = df["Low"].astype(float).values
         closes  = df["Close"].astype(float).values
@@ -154,6 +243,7 @@ def fetch_and_analyze(ticker):
         latest_close = float(closes[-1])
         adx, ci = calc_adx_ci(highs, lows, closes)
         trend_class = classify_trend(adx, ci)
+        pf, trade_count = backtest_sma5_20(opens, highs, lows, closes)
 
         return {
             "ticker": ticker,
@@ -164,6 +254,8 @@ def fetch_and_analyze(ticker):
             "adx": round(adx, 1) if adx is not None else None,
             "ci": round(ci, 1) if ci is not None else None,
             "trend_class": trend_class,
+            "pf": round(pf, 3) if pf is not None else None,
+            "trade_count": trade_count,
             "closes":  [round(float(c), 2) for c in closes],
             "volumes": [int(v) for v in volumes],
         }
@@ -237,24 +329,29 @@ a.back{color:#378ADD;font-size:14px}
 <h2>トレンド/レンジ 判定スクリーナー</h2>
 <p style="color:#666" id="meta"></p>
 <canvas id="scatter" style="max-height:340px"></canvas>
+<div id="groupStats" style="display:flex; gap:12px; margin:1rem 0; flex-wrap:wrap;"></div>
 <table id="tbl"><thead><tr>
-<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th>
+<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th>
 </tr></thead><tbody></tbody></table>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 const label = c => c==='trend' ? 'トレンド向き' : c==='range' ? 'レンジ・往来' : '中間';
-let sortKey='adx', sortDir=-1;
+let sortKey='pf', sortDir=-1;
 fetch('data.json').then(r=>r.json()).then(d=>{
   const rows = d.data.filter(r=>r.adx!=null && r.ci!=null);
-  document.getElementById('meta').textContent = `更新: ${d.run_time} / 判定対象 ${rows.length}銘柄`;
+  document.getElementById('meta').textContent = `更新: ${d.run_time} / 判定対象 ${rows.length}銘柄（SMA5/20戦略PF・手数料0・損切り8%）`;
   function render(){
-    const sorted = rows.slice().sort((a,b)=> sortKey==='ticker'||sortKey==='trend_class'
-      ? sortDir*String(a[sortKey]).localeCompare(String(b[sortKey]))
-      : sortDir*(a[sortKey]-b[sortKey]));
+    const sorted = rows.slice().sort((a,b)=>{
+      if (sortKey==='ticker'||sortKey==='trend_class') return sortDir*String(a[sortKey]).localeCompare(String(b[sortKey]));
+      const av = a[sortKey]==null ? -Infinity : a[sortKey];
+      const bv = b[sortKey]==null ? -Infinity : b[sortKey];
+      return sortDir*(av-bv);
+    });
     document.querySelector('#tbl tbody').innerHTML = sorted.map(r=>
       `<tr><td>${r.ticker}</td><td>${r.adx.toFixed(1)}</td><td>${r.ci.toFixed(1)}</td>`+
-      `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td></tr>`).join('');
+      `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td>`+
+      `<td>${r.pf!=null ? r.pf.toFixed(3) : '-'}</td><td>${r.trade_count!=null ? r.trade_count : '-'}</td></tr>`).join('');
   }
   document.querySelectorAll('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
     const k=th.dataset.k;
@@ -262,6 +359,16 @@ fetch('data.json').then(r=>r.json()).then(d=>{
     render();
   }));
   render();
+  const groups = {trend:[], mid:[], range:[]};
+  rows.forEach(r=>{ if (r.pf!=null && groups[r.trend_class]) groups[r.trend_class].push(r.pf); });
+  const gLabel = {trend:'トレンド向き', mid:'中間', range:'レンジ・往来'};
+  document.getElementById('groupStats').innerHTML = Object.keys(groups).map(k=>{
+    const arr = groups[k];
+    const avg = arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(3) : '-';
+    return `<div style="background:#f5f5f0;border-radius:8px;padding:.75rem 1rem;min-width:140px;">`+
+      `<div style="font-size:12px;color:#666;">${gLabel[k]}（n=${arr.length}）</div>`+
+      `<div style="font-size:20px;font-weight:600;">平均PF ${avg}</div></div>`;
+  }).join('');
   const colors = {trend:'#1D9E75', range:'#D85A30', mid:'#888780'};
   new Chart(document.getElementById('scatter'), {
     type:'scatter',
