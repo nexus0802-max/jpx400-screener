@@ -1,12 +1,3 @@
-"""
-サテライト銘柄スクリーナー v2 - Phase 1
-ファンダメンタルズ取得＋複合スコア算出のみを追加した段階。
-既存の価格取得・テクニカル計算ロジック（calc_rsi / calc_adx_ci / classify_trend）はそのまま流用。
-backtest_sma5_20 のみ、ストップロスのギャップダウン対応を修正済み。
-
-このPhaseでは表示用HTMLは作らない（Phase 5で対応）。
-docs/data.json に fund_* フィールドが正しく載るかをまず確認するためのスクリプト。
-"""
 import yfinance as yf
 import pandas as pd
 import numpy as np
@@ -57,8 +48,6 @@ JPX400_TICKERS = [
     "9719","9735","9744","9759","9766","9843","9962","9983","9984","9989",
 ]
 
-# ---------- 既存ロジック（テクニカル）：そのまま流用 ----------
-
 def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50
@@ -72,12 +61,15 @@ def calc_rsi(prices, period=14):
         al = (al * (period-1) + losses[i]) / period
     return 100 if al == 0 else float(100 - 100 / (1 + ag/al))
 
-
 def calc_adx_ci(highs, lows, closes, period=14, lookback=60):
+    """直近lookback本平均のADXとチョピネス指数(CI)を返す。データ不足時は(None, None)"""
     n = len(closes)
     if n < period * 2 + 1:
         return None, None
-    tr  = np.zeros(n); pdm = np.zeros(n); mdm = np.zeros(n)
+
+    tr  = np.zeros(n)
+    pdm = np.zeros(n)
+    mdm = np.zeros(n)
     for i in range(1, n):
         h, l, pc = highs[i], lows[i], closes[i-1]
         ph, pl = highs[i-1], lows[i-1]
@@ -85,20 +77,28 @@ def calc_adx_ci(highs, lows, closes, period=14, lookback=60):
         up, down = h - ph, pl - l
         pdm[i] = up if (up > down and up > 0) else 0
         mdm[i] = down if (down > up and down > 0) else 0
-    sm_tr = np.full(n, np.nan); sm_pdm = np.full(n, np.nan); sm_mdm = np.full(n, np.nan)
-    sm_tr[period] = tr[1:period+1].sum(); sm_pdm[period] = pdm[1:period+1].sum(); sm_mdm[period] = mdm[1:period+1].sum()
+
+    sm_tr  = np.full(n, np.nan)
+    sm_pdm = np.full(n, np.nan)
+    sm_mdm = np.full(n, np.nan)
+    sm_tr[period]  = tr[1:period+1].sum()
+    sm_pdm[period] = pdm[1:period+1].sum()
+    sm_mdm[period] = mdm[1:period+1].sum()
     for i in range(period + 1, n):
         sm_tr[i]  = sm_tr[i-1]  - sm_tr[i-1]/period  + tr[i]
         sm_pdm[i] = sm_pdm[i-1] - sm_pdm[i-1]/period + pdm[i]
         sm_mdm[i] = sm_mdm[i-1] - sm_mdm[i-1]/period + mdm[i]
+
     dx = np.full(n, np.nan)
     for i in range(period, n):
         if sm_tr[i] == 0:
             pdi = mdi = 0.0
         else:
-            pdi = 100 * sm_pdm[i] / sm_tr[i]; mdi = 100 * sm_mdm[i] / sm_tr[i]
+            pdi = 100 * sm_pdm[i] / sm_tr[i]
+            mdi = 100 * sm_mdm[i] / sm_tr[i]
         s = pdi + mdi
         dx[i] = 0 if s == 0 else 100 * abs(pdi - mdi) / s
+
     first_adx_idx = period * 2
     if first_adx_idx >= n:
         return None, None
@@ -106,19 +106,21 @@ def calc_adx_ci(highs, lows, closes, period=14, lookback=60):
     adx[first_adx_idx - 1] = np.mean(dx[period:first_adx_idx])
     for i in range(first_adx_idx, n):
         adx[i] = (adx[i-1] * (period - 1) + dx[i]) / period
+
     ci = np.full(n, np.nan)
     for i in range(period, n):
         window_tr = tr[i-period+1:i+1].sum()
-        hh = highs[i-period+1:i+1].max(); ll = lows[i-period+1:i+1].min()
+        hh = highs[i-period+1:i+1].max()
+        ll = lows[i-period+1:i+1].min()
         rng = hh - ll
         ci[i] = 100 * np.log10(window_tr / rng) / np.log10(period) if rng > 0 else 0
+
     start = max(0, n - lookback)
     adx_vals = adx[start:][~np.isnan(adx[start:])]
     ci_vals  = ci[start:][~np.isnan(ci[start:])]
     if len(adx_vals) == 0 or len(ci_vals) == 0:
         return None, None
     return float(np.mean(adx_vals)), float(np.mean(ci_vals))
-
 
 def classify_trend(adx, ci):
     if adx is None or ci is None:
@@ -129,36 +131,52 @@ def classify_trend(adx, ci):
         return "range"
     return "mid"
 
-
 def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20,
                       body_pct=50, max_bars_after_cross=10, stop_loss_pct=8,
                       min_body_to_range_pct=60):
     """
-    【修正済み】ストップロスの約定価格が、当日始値がストップを下回ってギャップダウンした
-    場合はその始値で約定するように修正（従来は理論上のストップ価格で約定した前提だった）。
+    SMA5/20戦略の簡易バックテスト（手数料0、スリッページなし）。
+    エントリー: シグナル翌日の始値で約定。損切りは当日の安値で判定（成行想定）。
+    利確（陰線でSMA5割れ）は終値で約定とする近似。
+    min_body_to_range_pct: 実体の大きさ÷値幅全体(高値-安値)の比率フィルター（ヒゲ主体の迷い足を除外）。
+
+    戻り値: dict（トレードが1件もない場合は None）
+      pf, trade_count, win_rate,
+      avg_bars_held, avg_return_pct,
+      avg_bars_win, avg_bars_loss, avg_return_win, avg_return_loss
     """
     n = len(closes)
     if n < sma_slow_len + max_bars_after_cross + 5:
         return None
+
     sma5  = pd.Series(closes).rolling(sma_fast_len).mean().values
     sma20 = pd.Series(closes).rolling(sma_slow_len).mean().values
-    waiting = False; cross_i = -1; position = False
-    entry_price = 0.0; entry_index = -1; stop_price = 0.0
-    trades = []
+
+    waiting = False
+    cross_i = -1
+    position = False
+    entry_price = 0.0
+    entry_index = -1
+    stop_price = 0.0
+    trades = []  # 各要素: (bars_held, return_pct, is_win)
 
     start = sma_slow_len
     for i in range(start, n):
         if np.isnan(sma5[i]) or np.isnan(sma20[i]) or np.isnan(sma5[i-1]) or np.isnan(sma20[i-1]):
             continue
+
         golden = sma5[i-1] <= sma20[i-1] and sma5[i] > sma20[i]
         dead   = sma5[i-1] >= sma20[i-1] and sma5[i] < sma20[i]
-        if golden: waiting = True; cross_i = i
-        if dead: waiting = False
+        if golden:
+            waiting = True
+            cross_i = i
+        if dead:
+            waiting = False
 
         if position:
+            # 損切り判定（当日安値がストップ以下なら約定）
             if lows[i] <= stop_price:
-                # ★修正点：始値がストップより下でギャップダウンしていたら始値で約定
-                exit_price = min(stop_price, opens[i])
+                exit_price = stop_price
                 bars_held = i - entry_index
                 return_pct = (exit_price / entry_price - 1) * 100
                 trades.append((bars_held, return_pct, return_pct >= 0))
@@ -175,12 +193,16 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
         else:
             if waiting and (i - cross_i) <= max_bars_after_cross:
                 bullish = closes[i] > opens[i]
-                body_high = max(opens[i], closes[i]); body_low = min(opens[i], closes[i])
+                body_high = max(opens[i], closes[i])
+                body_low  = min(opens[i], closes[i])
                 body_size = body_high - body_low
                 if body_size > 0:
-                    if sma5[i] <= body_low: above_amt = body_size
-                    elif sma5[i] >= body_high: above_amt = 0.0
-                    else: above_amt = body_high - sma5[i]
+                    if sma5[i] <= body_low:
+                        above_amt = body_size
+                    elif sma5[i] >= body_high:
+                        above_amt = 0.0
+                    else:
+                        above_amt = body_high - sma5[i]
                     above_pct = above_amt / body_size * 100
                 else:
                     above_pct = 0.0
@@ -188,24 +210,32 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
                 body_to_range_pct = (body_size / total_range * 100) if total_range > 0 else 0.0
                 if (bullish and above_pct >= body_pct
                         and body_to_range_pct >= min_body_to_range_pct and i + 1 < n):
-                    entry_price = opens[i + 1]; entry_index = i + 1
+                    entry_price = opens[i + 1]
+                    entry_index = i + 1
                     stop_price  = entry_price * (1 - stop_loss_pct / 100)
-                    position = True; waiting = False
+                    position = True
+                    waiting = False
 
     if len(trades) == 0:
         return None
-    wins_sum = sum(r for _, r, w in trades if w)
+
+    wins_sum   = sum(r for _, r, w in trades if w)
     losses_sum = sum(-r for _, r, w in trades if not w)
     trade_count = len(trades)
-    win_trades = [t for t in trades if t[2]]
+    win_trades  = [t for t in trades if t[2]]
     loss_trades = [t for t in trades if not t[2]]
-    pf = None if losses_sum == 0 and wins_sum == 0 else (999.0 if losses_sum == 0 else wins_sum / losses_sum)
+
+    if losses_sum == 0:
+        pf = None if wins_sum == 0 else 999.0  # 負けトレードが皆無の場合の便宜的な上限値
+    else:
+        pf = wins_sum / losses_sum
 
     def _avg(vals):
         return float(np.mean(vals)) if len(vals) > 0 else None
 
     return {
-        "pf": pf, "trade_count": trade_count,
+        "pf": pf,
+        "trade_count": trade_count,
         "win_rate": round(len(win_trades) / trade_count * 100, 1),
         "avg_bars_held": _avg([t[0] for t in trades]),
         "avg_return_pct": _avg([t[1] for t in trades]),
@@ -214,38 +244,6 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
         "avg_return_win": _avg([t[1] for t in win_trades]),
         "avg_return_loss": _avg([t[1] for t in loss_trades]),
     }
-
-
-# ---------- 新規：ファンダメンタルズ取得 ----------
-
-FUND_KEYS = ["trailing_pe", "price_to_book", "roe", "profit_margin",
-             "revenue_growth", "earnings_growth"]
-
-def fetch_fundamentals(ticker):
-    """yfinanceの.infoからファンダメンタルズ指標を取得。
-    JP株は項目が欠損することが多いので、取れない項目はNoneのまま返す
-    （複合スコア側で母集団平均補完する）。"""
-    try:
-        t = f"{ticker}.T"
-        info = yf.Ticker(t).info
-        pe = info.get("trailingPE")
-        # 赤字企業のマイナスPERは「割安」ではなく単に無意味なので欠損扱いにする
-        if pe is not None and pe <= 0:
-            pe = None
-        return {
-            "trailing_pe": pe,
-            "price_to_book": info.get("priceToBook"),
-            "roe": info.get("returnOnEquity"),
-            "profit_margin": info.get("profitMargins"),
-            "revenue_growth": info.get("revenueGrowth"),
-            "earnings_growth": info.get("earningsGrowth"),
-        }
-    except Exception as e:
-        print(f"  ファンダ取得エラー: {ticker} - {e}")
-        return {k: None for k in FUND_KEYS}
-
-
-# ---------- 価格取得＋テクニカル（既存＋ファンダ統合） ----------
 
 def fetch_and_analyze(ticker):
     try:
@@ -259,10 +257,10 @@ def fetch_and_analyze(ticker):
         if len(df) < 100:
             return None
 
-        opens = df["Open"].astype(float).values
-        highs = df["High"].astype(float).values
-        lows = df["Low"].astype(float).values
-        closes = df["Close"].astype(float).values
+        opens   = df["Open"].astype(float).values
+        highs   = df["High"].astype(float).values
+        lows    = df["Low"].astype(float).values
+        closes  = df["Close"].astype(float).values
         volumes = df["Volume"].astype(float).values
         N = len(closes)
 
@@ -272,12 +270,21 @@ def fetch_and_analyze(ticker):
         adx, ci = calc_adx_ci(highs, lows, closes)
         trend_class = classify_trend(adx, ci)
         bt = backtest_sma5_20(opens, highs, lows, closes)
-        fund = fetch_fundamentals(ticker)
+
+        # ==== ウォークフォワード検証: 前半(IS)で選定 → 後半(OOS)で検証 ====
+        split = N // 2
+        bt_is = bt_oos = None
+        trend_class_is = None
+        if split >= 60 and (N - split) >= 60:
+            adx_is, ci_is = calc_adx_ci(highs[:split], lows[:split], closes[:split])
+            trend_class_is = classify_trend(adx_is, ci_is)
+            bt_is  = backtest_sma5_20(opens[:split], highs[:split], lows[:split], closes[:split])
+            bt_oos = backtest_sma5_20(opens[split:], highs[split:], lows[split:], closes[split:])
 
         def r2(v):
             return round(v, 3) if v is not None else None
 
-        rec = {
+        return {
             "ticker": ticker,
             "rsi": round(rsi, 1),
             "ma200": round(ma200, 2),
@@ -289,54 +296,25 @@ def fetch_and_analyze(ticker):
             "pf": r2(bt["pf"]) if bt else None,
             "trade_count": bt["trade_count"] if bt else None,
             "win_rate": bt["win_rate"] if bt else None,
+            "avg_bars_held": r2(bt["avg_bars_held"]) if bt else None,
             "avg_return_pct": r2(bt["avg_return_pct"]) if bt else None,
-            "closes": [round(float(c), 2) for c in closes],
+            "avg_bars_win": r2(bt["avg_bars_win"]) if bt else None,
+            "avg_bars_loss": r2(bt["avg_bars_loss"]) if bt else None,
+            "avg_return_win": r2(bt["avg_return_win"]) if bt else None,
+            "avg_return_loss": r2(bt["avg_return_loss"]) if bt else None,
+            "trend_class_is": trend_class_is,
+            "pf_is": r2(bt_is["pf"]) if bt_is else None,
+            "trades_is": bt_is["trade_count"] if bt_is else None,
+            "avg_return_pct_is": r2(bt_is["avg_return_pct"]) if bt_is else None,
+            "pf_oos": r2(bt_oos["pf"]) if bt_oos else None,
+            "trades_oos": bt_oos["trade_count"] if bt_oos else None,
+            "avg_return_pct_oos": r2(bt_oos["avg_return_pct"]) if bt_oos else None,
+            "closes":  [round(float(c), 2) for c in closes],
             "volumes": [int(v) for v in volumes],
         }
-        rec.update(fund)
-        return rec
     except Exception as e:
         print(f"  エラー: {ticker} - {e}")
         return None
-
-
-# ---------- 新規：ファンダ複合スコア（パーセンタイル方式） ----------
-
-def compute_fund_scores(records, weights=(0.30, 0.40, 0.30)):
-    """
-    JPX400内でのパーセンタイル順位に基づく複合スコア（0〜100）を付与する。
-    実数の標準化ではなく順位ベースにすることで、外れ値（極端なPERなど）の影響を抑える。
-    欠損値はその指標だけ0.5（中央値相当）で補完し、複合スコア全体が歪まないようにする。
-    weights = (割安性, 収益の質, 成長性)
-    """
-    df = pd.DataFrame(records)
-
-    def pct_rank(col, higher_is_better):
-        return df[col].rank(pct=True, ascending=higher_is_better)
-
-    per_score = pct_rank("trailing_pe", higher_is_better=False).fillna(0.5)
-    pbr_score = pct_rank("price_to_book", higher_is_better=False).fillna(0.5)
-    value_score = (per_score + pbr_score) / 2
-
-    roe_score = pct_rank("roe", higher_is_better=True).fillna(0.5)
-    margin_score = pct_rank("profit_margin", higher_is_better=True).fillna(0.5)
-    quality_score = (roe_score + margin_score) / 2
-
-    rev_score = pct_rank("revenue_growth", higher_is_better=True).fillna(0.5)
-    earn_score = pct_rank("earnings_growth", higher_is_better=True).fillna(0.5)
-    growth_score = (rev_score + earn_score) / 2
-
-    w_value, w_quality, w_growth = weights
-    fund_score = (value_score * w_value + quality_score * w_quality + growth_score * w_growth) * 100
-
-    df["fund_value_score"] = (value_score * 100).round(1)
-    df["fund_quality_score"] = (quality_score * 100).round(1)
-    df["fund_growth_score"] = (growth_score * 100).round(1)
-    df["fund_score"] = fund_score.round(1)
-    df["fund_percentile"] = (fund_score.rank(pct=True) * 100).round(1)
-
-    return df.to_dict(orient="records")
-
 
 def main():
     JST = timezone(timedelta(hours=9))
@@ -350,21 +328,189 @@ def main():
         result = fetch_and_analyze(ticker)
         if result:
             all_results.append(result)
-            print(f"  -> OK RSI={result['rsi']} 終値={result['latest_close']} "
-                  f"PER={result.get('trailing_pe')} ROE={result.get('roe')}")
+            print(f"  -> OK RSI={result['rsi']} 終値={result['latest_close']}")
         else:
             print(f"  -> スキップ")
 
-    print("ファンダ複合スコアを計算中...")
-    all_results = compute_fund_scores(all_results)
-
     run_time = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
-    output = {"run_time": run_time, "ticker_count": len(all_results), "data": all_results}
-    with open("docs/data_v2_phase1.json", "w", encoding="utf-8") as f:
+    output = {
+        "run_time": run_time,
+        "ticker_count": len(all_results),
+        "data": all_results,
+    }
+    with open("docs/data.json", "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False)
 
-    print(f"\n完了: {len(all_results)}銘柄 -> docs/data_v2_phase1.json")
-    print("（既存のdocs/data.jsonは上書きしていません。中身を確認してから本番に反映してください）")
+    with open("docs/index.html", "w", encoding="utf-8") as f:
+        f.write(f"""<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8">
+<title>JPX400 スクリーナー</title>
+<style>body{{font-family:sans-serif;padding:2rem;background:#f5f5f0}}
+.card{{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.5rem;max-width:500px}}
+a{{color:#378ADD;display:block;margin:.5rem 0;font-size:15px}}</style></head>
+<body><div class="card">
+<h2>📊 JPX400 スクリーナー</h2>
+<p style="color:#666;margin:.5rem 0 1rem">更新: {run_time} / {len(all_results)}銘柄</p>
+<a href="screener.html">▶ パターンマッチング スクリーナー</a>
+<a href="breakout.html">▶ MA収束ブレイクアウト スクリーナー</a>
+<a href="vcp.html">▶ VCP（収縮パターン）スクリーナー</a>
+<a href="trend.html">▶ トレンド/レンジ 判定スクリーナー</a>
+</div></body></html>""")
+
+    write_trend_page()
+
+    print(f"\n完了: {len(all_results)}銘柄 -> docs/data.json")
+
+def write_trend_page():
+    html = """<!DOCTYPE html>
+<html lang="ja"><head><meta charset="UTF-8">
+<title>トレンド/レンジ 判定スクリーナー</title>
+<style>
+body{font-family:sans-serif;padding:2rem;background:#f5f5f0;color:#222}
+.card{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.5rem;max-width:900px;margin:0 auto}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:1rem}
+th{text-align:left;padding:8px 6px;border-bottom:1px solid #ccc;cursor:pointer;color:#666}
+td{padding:8px 6px;border-bottom:1px solid #eee}
+.badge{font-size:12px;padding:2px 8px;border-radius:6px}
+.trend{background:#EAF3DE;color:#27500A}
+.range{background:#FCEBEB;color:#791F1F}
+.mid{background:#F1EFE8;color:#444441}
+a.back{color:#378ADD;font-size:14px}
+</style></head>
+<body><div class="card">
+<a class="back" href="index.html">&larr; 戻る</a>
+<h2>トレンド/レンジ 判定スクリーナー</h2>
+<p style="color:#666" id="meta"></p>
+<canvas id="scatter" style="max-height:340px"></canvas>
+<div id="groupStats" style="display:flex; gap:12px; margin:1rem 0; flex-wrap:wrap;"></div>
+<h3 style="margin:1.5rem 0 .5rem;font-size:15px;">保有日数・リターンの分布（銘柄ごとの平均値、392銘柄）</h3>
+<canvas id="holdReturnScatter" style="max-height:320px"></canvas>
+<div style="display:flex; gap:16px; margin-top:1rem; flex-wrap:wrap;">
+  <div style="flex:1; min-width:280px;"><canvas id="barsHeldHist" style="max-height:260px"></canvas></div>
+  <div style="flex:1; min-width:280px;"><canvas id="returnHist" style="max-height:260px"></canvas></div>
+</div>
+<table id="tbl"><thead><tr>
+<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th><th data-k="win_rate">勝率%</th><th data-k="avg_bars_held">平均保有日数</th><th data-k="avg_return_pct">平均リターン%</th>
+</tr></thead><tbody></tbody></table>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const label = c => c==='trend' ? 'トレンド向き' : c==='range' ? 'レンジ・往来' : '中間';
+let sortKey='pf', sortDir=-1;
+fetch('data.json').then(r=>r.json()).then(d=>{
+  const rows = d.data.filter(r=>r.adx!=null && r.ci!=null);
+  document.getElementById('meta').textContent = `更新: ${d.run_time} / 判定対象 ${rows.length}銘柄（SMA5/20戦略PF・手数料0・損切り8%）`;
+  function render(){
+    const sorted = rows.slice().sort((a,b)=>{
+      if (sortKey==='ticker'||sortKey==='trend_class') return sortDir*String(a[sortKey]).localeCompare(String(b[sortKey]));
+      const av = a[sortKey]==null ? -Infinity : a[sortKey];
+      const bv = b[sortKey]==null ? -Infinity : b[sortKey];
+      return sortDir*(av-bv);
+    });
+    document.querySelector('#tbl tbody').innerHTML = sorted.map(r=>
+      `<tr><td>${r.ticker}</td><td>${r.adx.toFixed(1)}</td><td>${r.ci.toFixed(1)}</td>`+
+      `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td>`+
+      `<td>${r.pf!=null ? r.pf.toFixed(3) : '-'}</td><td>${r.trade_count!=null ? r.trade_count : '-'}</td>`+
+      `<td>${r.win_rate!=null ? r.win_rate.toFixed(1) : '-'}</td>`+
+      `<td>${r.avg_bars_held!=null ? r.avg_bars_held.toFixed(1) : '-'}</td>`+
+      `<td>${r.avg_return_pct!=null ? r.avg_return_pct.toFixed(2) : '-'}</td></tr>`).join('');
+  }
+  document.querySelectorAll('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
+    const k=th.dataset.k;
+    if(sortKey===k) sortDir*=-1; else {sortKey=k; sortDir = (k==='ticker'||k==='trend_class')?1:-1;}
+    render();
+  }));
+  render();
+  const groups = {trend:[], mid:[], range:[]};
+  rows.forEach(r=>{ if (r.pf!=null && groups[r.trend_class]) groups[r.trend_class].push(r.pf); });
+  const gLabel = {trend:'トレンド向き', mid:'中間', range:'レンジ・往来'};
+  document.getElementById('groupStats').innerHTML = Object.keys(groups).map(k=>{
+    const arr = groups[k];
+    const avg = arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(3) : '-';
+    return `<div style="background:#f5f5f0;border-radius:8px;padding:.75rem 1rem;min-width:140px;">`+
+      `<div style="font-size:12px;color:#666;">${gLabel[k]}（n=${arr.length}）</div>`+
+      `<div style="font-size:20px;font-weight:600;">平均PF ${avg}</div></div>`;
+  }).join('');
+
+  // ==== ウォークフォワード検証: 前半でトレンド向き&PF>1選定 → 後半の成績 ====
+  const MIN_TRADES = 15;
+  const isSelected = rows.filter(r => r.trend_class_is==='trend' && r.pf_is!=null && r.pf_is>1
+      && r.trades_is!=null && r.trades_is>=MIN_TRADES && r.pf_oos!=null && r.trades_oos>=MIN_TRADES);
+  const others = rows.filter(r => !(r.trend_class_is==='trend' && r.pf_is!=null && r.pf_is>1)
+      && r.pf_oos!=null && r.trades_oos>=MIN_TRADES);
+  const avgOf = arr => arr.length ? (arr.reduce((a,b)=>a+b.pf_oos,0)/arr.length).toFixed(3) : '-';
+  const wfDiv = document.createElement('div');
+  wfDiv.style.cssText = 'margin:1.5rem 0;padding:1rem;background:#F5F5F0;border-radius:8px;';
+  wfDiv.innerHTML = `<div style="font-weight:600;margin-bottom:.5rem;">ウォークフォワード検証：前半データで「トレンド向き かつ PF&gt;1」を選定 → 後半期間の成績</div>`+
+    `<div style="display:flex;gap:24px;flex-wrap:wrap;">`+
+    `<div><div style="font-size:12px;color:#666;">前半で選定された銘柄（n=${isSelected.length}）の後半平均PF</div><div style="font-size:22px;font-weight:600;">${avgOf(isSelected)}</div></div>`+
+    `<div><div style="font-size:12px;color:#666;">それ以外の銘柄（n=${others.length}）の後半平均PF</div><div style="font-size:22px;font-weight:600;">${avgOf(others)}</div></div>`+
+    `</div><div style="font-size:12px;color:#888;margin-top:.5rem;">トレード回数${MIN_TRADES}回未満の期間は除外。前半のみの情報で選定し、後半は一切参照していません。</div>`;
+  document.getElementById('groupStats').after(wfDiv);
+
+  // ==== ウォークフォワード検証: 前半の平均リターン上位25% → 後半の平均リターン ====
+  const withIS = rows.filter(r => r.avg_return_pct_is!=null && r.trades_is>=MIN_TRADES
+      && r.avg_return_pct_oos!=null && r.trades_oos>=MIN_TRADES);
+  const byReturnIs = withIS.slice().sort((a,b)=> b.avg_return_pct_is - a.avg_return_pct_is);
+  const topN = Math.floor(byReturnIs.length / 4); // 上位25%
+  const topGroup = byReturnIs.slice(0, topN);
+  const restGroup = byReturnIs.slice(topN);
+  const avgOosReturn = arr => arr.length ? (arr.reduce((a,b)=>a+b.avg_return_pct_oos,0)/arr.length).toFixed(3) : '-';
+  const wfReturnDiv = document.createElement('div');
+  wfReturnDiv.style.cssText = 'margin:1.5rem 0;padding:1rem;background:#F5F5F0;border-radius:8px;';
+  wfReturnDiv.innerHTML = `<div style="font-weight:600;margin-bottom:.5rem;">ウォークフォワード検証：前半の「平均リターンが高い上位25%」を選定 → 後半期間の平均リターン</div>`+
+    `<div style="display:flex;gap:24px;flex-wrap:wrap;">`+
+    `<div><div style="font-size:12px;color:#666;">前半上位25%だった銘柄（n=${topGroup.length}）の後半平均リターン%</div><div style="font-size:22px;font-weight:600;">${avgOosReturn(topGroup)}</div></div>`+
+    `<div><div style="font-size:12px;color:#666;">それ以外の銘柄（n=${restGroup.length}）の後半平均リターン%</div><div style="font-size:22px;font-weight:600;">${avgOosReturn(restGroup)}</div></div>`+
+    `</div><div style="font-size:12px;color:#888;margin-top:.5rem;">トレード回数${MIN_TRADES}回未満の期間は除外。前半の平均リターンのみで選定し、後半は一切参照していません。</div>`;
+  wfDiv.after(wfReturnDiv);
+
+  const colors = {trend:'#1D9E75', range:'#D85A30', mid:'#888780'};
+  new Chart(document.getElementById('scatter'), {
+    type:'scatter',
+    data:{datasets:[{label:'銘柄', data:rows.map(r=>({x:r.ci,y:r.adx,ticker:r.ticker})),
+      backgroundColor: rows.map(r=>colors[r.trend_class])}]},
+    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.raw.ticker} ADX:${c.raw.y.toFixed(1)} CI:${c.raw.x.toFixed(1)}`}}},
+      scales:{x:{title:{display:true,text:'チョピネス指数（低いほどトレンド）'}}, y:{title:{display:true,text:'ADX（高いほどトレンド）'}}}}
+  });
+
+  // ==== 平均保有日数 × 平均リターン% の散布図 ====
+  const distRows = rows.filter(r => r.avg_bars_held!=null && r.avg_return_pct!=null);
+  new Chart(document.getElementById('holdReturnScatter'), {
+    type:'scatter',
+    data:{datasets:[{label:'銘柄', data:distRows.map(r=>({x:r.avg_bars_held,y:r.avg_return_pct,ticker:r.ticker})),
+      backgroundColor: distRows.map(r=>colors[r.trend_class])}]},
+    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.raw.ticker} 保有${c.raw.x.toFixed(1)}日 / リターン${c.raw.y.toFixed(2)}%`}}},
+      scales:{x:{title:{display:true,text:'平均保有日数'}}, y:{title:{display:true,text:'平均リターン（%）'}}}}
+  });
+
+  // ==== ヒストグラム共通関数 ====
+  function makeHistogram(canvasId, values, binCount, xTitle){
+    if (values.length === 0) return;
+    const min = Math.min(...values), max = Math.max(...values);
+    const width = (max - min) / binCount || 1;
+    const bins = new Array(binCount).fill(0);
+    values.forEach(v=>{
+      let idx = Math.floor((v - min) / width);
+      if (idx >= binCount) idx = binCount - 1;
+      if (idx < 0) idx = 0;
+      bins[idx]++;
+    });
+    const labels = bins.map((_, i)=> (min + i*width).toFixed(1));
+    new Chart(document.getElementById(canvasId), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: '銘柄数', data: bins, backgroundColor: '#378ADD' }] },
+      options: { plugins:{legend:{display:false}},
+        scales: { x: { title: { display:true, text: xTitle } }, y: { title:{ display:true, text:'銘柄数' }, ticks:{ precision:0 } } } }
+    });
+  }
+  makeHistogram('barsHeldHist', distRows.map(r=>r.avg_bars_held), 20, '平均保有日数');
+  makeHistogram('returnHist', distRows.map(r=>r.avg_return_pct), 20, '平均リターン（%）');
+});
+</script>
+</body></html>"""
+    with open("docs/trend.html", "w", encoding="utf-8") as f:
+        f.write(html)
 
 if __name__ == "__main__":
     main()
