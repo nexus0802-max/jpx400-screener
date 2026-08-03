@@ -731,7 +731,7 @@ def walkforward_rs_validation(closes_by_ticker, sample_every=21, horizon=63):
     }
 
 
-
+def main():
     JST = timezone(timedelta(hours=9))
     print(f"データ取得開始: {datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S JST')}")
     os.makedirs("docs", exist_ok=True)
