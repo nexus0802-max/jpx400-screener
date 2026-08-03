@@ -354,11 +354,19 @@ def analyze_vcp(closes, volumes,
     if is_ma50_above: score += 10
     if is_ma200_up: score += 10
     score += min(15, len(contractions) * 5)
-    if contractions and is_monotonic: score += 20
+    if contractions:
+        if is_monotonic:
+            score += 20
+        else:
+            score -= 15  # 収縮が乱れている場合は明確に減点する（単に加点なしにするだけでは不十分なため）
     if is_final_tight: score += 15
     if final_contraction and final_contraction["pct"] <= final_pct / 2: score += 5
     if is_vol_dry_up: score += 10
     if is_near_pivot: score += 15
+
+    # 満点120点を0-100スケールに正規化（統合スコアでファンダ/RS/地合いスコアと同じスケールで扱うため）
+    SCORE_MAX = 120
+    score_normalized = max(0, min(100, round(score / SCORE_MAX * 100, 1)))
 
     return {
         "vcp_stage2_pass": bool(stage2_pass),
@@ -372,7 +380,8 @@ def analyze_vcp(closes, volumes,
         "vcp_is_vol_dry_up": is_vol_dry_up,
         "vcp_is_near_pivot": is_near_pivot,
         "vcp_dist_to_pivot_pct": round(dist_to_pivot_pct, 2) if dist_to_pivot_pct is not None else None,
-        "vcp_score": score,
+        "vcp_score_raw": score,
+        "vcp_score": score_normalized,
     }
 
 
