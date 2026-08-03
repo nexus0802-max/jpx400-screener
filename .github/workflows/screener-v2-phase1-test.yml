@@ -1,4 +1,4 @@
-name: Screener v2 Phase1 Test (Manual)
+name: Screener v2 Test (Manual)
 
 on:
   workflow_dispatch:
