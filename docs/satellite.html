@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>サテライト銘柄スクリーナー</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;background:#f5f5f0;color:#1a1a1a;font-size:15px}
+.wrap{max-width:1200px;margin:0 auto;padding:1.5rem 1rem}
+h1{font-size:20px;font-weight:600;margin-bottom:1.5rem}
+.card{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.25rem 1.5rem;margin-bottom:1.25rem}
+.status-bar{font-size:13px;padding:.6rem 1rem;border-radius:8px;margin-bottom:1rem}
+.ok{background:#e8f5e0;color:#2d6a0a}
+.err{background:#fce8e8;color:#a32d2d}
+.loading{background:#f0f0f0;color:#666}
+.back-link{font-size:13px;color:#378ADD;text-decoration:none;display:inline-block;margin-bottom:1rem}
+.controls{display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin-bottom:.5rem}
+.control-group{display:flex;flex-direction:column;gap:4px}
+.control-label{font-size:11px;color:#888;font-weight:500;text-transform:uppercase;letter-spacing:.04em}
+.control-val{font-size:13px;color:#1a1a1a;font-weight:600}
+input[type=range]{width:160px;accent-color:#378ADD}
+.checks{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+.datasrc{display:flex;gap:6px;align-items:center;font-size:12px;color:#888;margin-top:.75rem;padding-top:.75rem;border-top:1px solid #f0f0f0}
+.datasrc input{font-size:12px;padding:3px 6px;border:1px solid #ddd;border-radius:4px;width:220px}
+.datasrc button{font-size:12px;padding:4px 10px;border:1px solid #ddd;border-radius:4px;background:#f8f8f8;cursor:pointer}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:1rem 0}
+.chip{font-size:12px;background:#f0f0f0;padding:3px 12px;border-radius:20px;color:#555}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{font-size:11px;font-weight:600;color:#888;text-align:left;padding:7px 10px;border-bottom:1px solid #e5e5e5;text-transform:uppercase;white-space:nowrap;cursor:pointer;user-select:none}
+thead th:hover{color:#378ADD}
+tbody tr:hover{background:#fafafa}
+tbody td{padding:8px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:5px;font-weight:600}
+.trend{background:#EAF3DE;color:#27500A}
+.range{background:#FCEBEB;color:#791F1F}
+.mid{background:#F1EFE8;color:#444441}
+.pass{background:#e8f5e0;color:#2d6a0a}
+.fail{background:#fce8e8;color:#a32d2d}
+.score-cell{display:flex;align-items:center;gap:6px}
+.score-bar-bg{width:50px;height:6px;border-radius:3px;background:#eee;overflow:hidden}
+.score-bar-fill{height:100%;background:#378ADD}
+.empty{text-align:center;padding:3rem;color:#aaa;font-size:14px}
+.warn{font-size:12px;color:#999;margin-top:1rem;padding-top:.75rem;border-top:1px solid #f0f0f0;line-height:1.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+<a href="index.html" class="back-link">&larr; トップへ戻る</a>
+<h1>🎯 サテライト銘柄スクリーナー（ファンダ×テクニカル統合スコア）</h1>
+
+<div id="statusBar" class="card status-bar loading">⏳ データを読み込み中...</div>
+
+<div class="card">
+  <div class="controls">
+    <div class="control-group">
+      <span class="control-label">最低 final_score</span>
+      <span class="control-val" id="minScoreVal">0</span>
+      <input type="range" min="0" max="100" step="5" value="0" id="minScore">
+    </div>
+    <div class="control-group">
+      <span class="control-label">絞り込み</span>
+      <label class="checks"><input type="checkbox" id="stage2Only"> Stage2通過のみ</label>
+    </div>
+    <div class="control-group">
+      <span class="control-label">&nbsp;</span>
+      <label class="checks"><input type="checkbox" id="trendOnly"> トレンド判定=trendのみ</label>
+    </div>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th data-k="rank">#</th>
+        <th data-k="ticker">銘柄</th>
+        <th data-k="latest_close">株価</th>
+        <th data-k="final_score">Final</th>
+        <th data-k="fund_score">Fund</th>
+        <th data-k="rs_percentile">RS</th>
+        <th data-k="vcp_score">VCP</th>
+        <th data-k="trend_class">トレンド</th>
+        <th data-k="vcp_stage2_pass">Stage2</th>
+        <th data-k="extension_from_ma200_pct">MA200乖離%</th>
+        <th data-k="dist_from_52w_high_pct">52週高値差%</th>
+      </tr></thead>
+      <tbody id="resultTb"></tbody>
+    </table>
+  </div>
+  <div id="emptyMsg" class="empty" style="display:none">
+    <div style="font-size:36px;margin-bottom:.5rem">🔍</div>
+    <p>条件に合う銘柄が見つかりませんでした。フィルターを緩めてみてください。</p>
+  </div>
+  <p class="warn">⚠️ 統合スコアはファンダメンタルズ複合スコア・RSランキング・VCPパターンスコアを組み合わせた機械的な指標であり、投資助言ではありません。実際のチャート・decisionsは必ずご自身で確認してください。RSの予測力は地合いに依存し常に機能するとは限らない点、ファンダスコアはウォークフォワード検証ができていない点にご留意ください。</p>
+
+  <div class="datasrc">
+    <span>データソース:</span>
+    <input type="text" id="dataSrc" value="data.json">
+    <button onclick="loadData()">再読み込み</button>
+    <span style="color:#bbb">（本番はdata.json。テスト時はdata_v2_phaseN.jsonに変更可）</span>
+  </div>
+</div>
+
+</div>
+
+<script>
+let rawData = null;
+let sortKey = 'final_score';
+let sortDir = -1;
+
+async function loadData() {
+  const bar = document.getElementById('statusBar');
+  const src = document.getElementById('dataSrc').value.trim() || 'data.json';
+  bar.className = 'card status-bar loading';
+  bar.textContent = '⏳ データを読み込み中...';
+  try {
+    const res = await fetch(src + '?t=' + Date.now());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    rawData = await res.json();
+    if (!rawData.data || rawData.data.length === 0) throw new Error('データが空です');
+    bar.className = 'card status-bar ok';
+    let regimeTxt = '';
+    if (rawData.market_regime) {
+      regimeTxt = ' / 地合いスコア: ' + rawData.market_regime.regime_score;
+    }
+    bar.textContent = '✅ ' + rawData.ticker_count + '銘柄 読み込み完了（更新: ' + rawData.run_time + regimeTxt + '）';
+    render();
+  } catch (e) {
+    bar.className = 'card status-bar err';
+    bar.textContent = '❌ ' + e.message + '（データソース名を確認してください）';
+  }
+}
+
+function applyFilters(data) {
+  const minScore = parseFloat(document.getElementById('minScore').value);
+  const stage2Only = document.getElementById('stage2Only').checked;
+  const trendOnly = document.getElementById('trendOnly').checked;
+  return data.filter(function (r) {
+    if ((r.final_score == null ? -Infinity : r.final_score) < minScore) return false;
+    if (stage2Only && !r.vcp_stage2_pass) return false;
+    if (trendOnly && r.trend_class !== 'trend') return false;
+    return true;
+  });
+}
+
+function sortData(data, key, dir) {
+  return data.slice().sort(function (a, b) {
+    let av = a[key], bv = b[key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (typeof av === 'string') return dir * String(av).localeCompare(String(bv));
+    if (typeof av === 'boolean') { av = av ? 1 : 0; bv = bv ? 1 : 0; }
+    return dir * (av - bv);
+  });
+}
+
+function trendLabel(c) {
+  return c === 'trend' ? 'トレンド' : c === 'range' ? 'レンジ' : c === 'mid' ? '中間' : '-';
+}
+
+function scoreBar(v) {
+  const val = v == null ? 0 : Math.max(0, Math.min(100, v));
+  return '<div class="score-cell"><span>' + (v == null ? '-' : v.toFixed(1)) + '</span>' +
+    '<div class="score-bar-bg"><div class="score-bar-fill" style="width:' + val + '%"></div></div></div>';
+}
+
+function render() {
+  if (!rawData) return;
+  const filtered = applyFilters(rawData.data);
+  const sorted = sortData(filtered, sortKey, sortDir);
+
+  document.getElementById('chips').innerHTML = [
+    '<span class="chip">更新: ' + rawData.run_time + '</span>',
+    '<span class="chip">対象: ' + rawData.ticker_count + '銘柄</span>',
+    '<span class="chip">表示: ' + sorted.length + '銘柄</span>',
+  ].join('');
+
+  const tbody = document.getElementById('resultTb');
+  if (sorted.length === 0) {
+    tbody.innerHTML = '';
+    document.getElementById('emptyMsg').style.display = 'block';
+    return;
+  }
+  document.getElementById('emptyMsg').style.display = 'none';
+
+  tbody.innerHTML = sorted.map(function (r, i) {
+    const trendCls = r.trend_class === 'trend' ? 'trend' : r.trend_class === 'range' ? 'range' : 'mid';
+    const stage2 = r.vcp_stage2_pass
+      ? '<span class="badge pass">✓</span>'
+      : '<span class="badge fail">-</span>';
+    return '<tr>' +
+      '<td>' + (i + 1) + '</td>' +
+      '<td><strong>' + r.ticker + '</strong></td>' +
+      '<td>' + (r.latest_close != null ? r.latest_close.toLocaleString() : '-') + '</td>' +
+      '<td>' + scoreBar(r.final_score) + '</td>' +
+      '<td>' + (r.fund_score != null ? r.fund_score.toFixed(1) : '-') + '</td>' +
+      '<td>' + (r.rs_percentile != null ? r.rs_percentile.toFixed(1) : '-') + '</td>' +
+      '<td>' + (r.vcp_score != null ? r.vcp_score.toFixed(1) : '-') + '</td>' +
+      '<td><span class="badge ' + trendCls + '">' + trendLabel(r.trend_class) + '</span></td>' +
+      '<td>' + stage2 + '</td>' +
+      '<td>' + (r.extension_from_ma200_pct != null ? r.extension_from_ma200_pct.toFixed(1) : '-') + '</td>' +
+      '<td>' + (r.dist_from_52w_high_pct != null ? r.dist_from_52w_high_pct.toFixed(1) : '-') + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+document.querySelectorAll('th[data-k]').forEach(function (th) {
+  th.addEventListener('click', function () {
+    const k = th.dataset.k;
+    if (k === 'rank') return;
+    if (sortKey === k) { sortDir *= -1; }
+    else { sortKey = k; sortDir = (k === 'ticker' || k === 'trend_class') ? 1 : -1; }
+    render();
+  });
+});
+
+document.getElementById('minScore').addEventListener('input', function () {
+  document.getElementById('minScoreVal').textContent = this.value;
+  render();
+});
+document.getElementById('stage2Only').addEventListener('change', render);
+document.getElementById('trendOnly').addEventListener('change', render);
+
+loadData();
+</script>
+</body>
+</html>
