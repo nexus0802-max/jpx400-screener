@@ -745,7 +745,7 @@ def sanitize_nan(obj):
     return obj
 
 
-
+def main():
     JST = timezone(timedelta(hours=9))
     print(f"データ取得開始: {datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S JST')}")
     os.makedirs("docs", exist_ok=True)
