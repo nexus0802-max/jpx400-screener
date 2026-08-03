@@ -14,6 +14,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import json
+import math
 from datetime import datetime, timezone, timedelta
 import os
 
@@ -731,7 +732,20 @@ def walkforward_rs_validation(closes_by_ticker, sample_every=21, horizon=63):
     }
 
 
-def main():
+def sanitize_nan(obj):
+    """PythonのNaNをJSON標準のnullに変換する（ブラウザのJSON.parseは裸のNaNトークンを
+    受け付けないため。json.dumpのデフォルト(allow_nan=True)はPython独自拡張でNaNをそのまま
+    書き出してしまい、それが原因でブラウザ側でJSONパースエラーになっていた）。"""
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_nan(v) for v in obj]
+    return obj
+
+
+
     JST = timezone(timedelta(hours=9))
     print(f"データ取得開始: {datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S JST')}")
     os.makedirs("docs", exist_ok=True)
@@ -786,8 +800,9 @@ def main():
         "rs_momentum_validation": rs_validation,
         "data": all_results,
     }
+    output = sanitize_nan(output)
     with open("docs/data_v2_phase5.json", "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False)
+        json.dump(output, f, ensure_ascii=False, allow_nan=False)
 
     print(f"\n完了: {len(all_results)}銘柄 -> docs/data_v2_phase5.json")
 
