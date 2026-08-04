@@ -66,6 +66,10 @@ tbody td{padding:8px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
       <span class="control-label">&nbsp;</span>
       <label class="checks"><input type="checkbox" id="trendOnly"> トレンド判定=trendのみ</label>
     </div>
+    <div class="control-group">
+      <span class="control-label">&nbsp;</span>
+      <label class="checks"><input type="checkbox" id="smaTrackRecord"> SMA5/20実績フィルター（トレンド向き・回数15+・PF1.3+）</label>
+    </div>
   </div>
   <div class="chips" id="chips"></div>
   <div style="overflow-x:auto">
@@ -83,6 +87,9 @@ tbody td{padding:8px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
         <th data-k="vcp_stage2_pass">Stage2</th>
         <th data-k="extension_from_ma200_pct">MA200乖離%</th>
         <th data-k="dist_from_52w_high_pct">52週高値差%</th>
+        <th data-k="pf">PF</th>
+        <th data-k="trade_count">回数</th>
+        <th data-k="win_rate">勝率%</th>
       </tr></thead>
       <tbody id="resultTb"></tbody>
     </table>
@@ -135,10 +142,16 @@ function applyFilters(data) {
   const minScore = parseFloat(document.getElementById('minScore').value);
   const stage2Only = document.getElementById('stage2Only').checked;
   const trendOnly = document.getElementById('trendOnly').checked;
+  const smaTrackRecord = document.getElementById('smaTrackRecord').checked;
   return data.filter(function (r) {
     if ((r.final_score == null ? -Infinity : r.final_score) < minScore) return false;
     if (stage2Only && !r.vcp_stage2_pass) return false;
     if (trendOnly && r.trend_class !== 'trend') return false;
+    if (smaTrackRecord) {
+      if (r.trend_class !== 'trend') return false;
+      if (r.trade_count == null || r.trade_count < 15) return false;
+      if (r.pf == null || r.pf < 1.3) return false;
+    }
     return true;
   });
 }
@@ -189,6 +202,8 @@ function render() {
     const stage2 = r.vcp_stage2_pass
       ? '<span class="badge pass">✓</span>'
       : '<span class="badge fail">-</span>';
+    const distHigh = r.dist_from_52w_high_pct;
+    const distHighStyle = (distHigh != null && distHigh < -15) ? ' style="color:#a32d2d;font-weight:600"' : '';
     return '<tr>' +
       '<td>' + (i + 1) + '</td>' +
       '<td><strong>' + r.ticker + '</strong></td>' +
@@ -201,7 +216,10 @@ function render() {
       '<td><span class="badge ' + trendCls + '">' + trendLabel(r.trend_class) + '</span></td>' +
       '<td>' + stage2 + '</td>' +
       '<td>' + (r.extension_from_ma200_pct != null ? r.extension_from_ma200_pct.toFixed(1) : '-') + '</td>' +
-      '<td>' + (r.dist_from_52w_high_pct != null ? r.dist_from_52w_high_pct.toFixed(1) : '-') + '</td>' +
+      '<td' + distHighStyle + '>' + (distHigh != null ? distHigh.toFixed(1) : '-') + '</td>' +
+      '<td>' + (r.pf != null ? r.pf.toFixed(2) : '-') + '</td>' +
+      '<td>' + (r.trade_count != null ? r.trade_count : '-') + '</td>' +
+      '<td>' + (r.win_rate != null ? r.win_rate.toFixed(1) : '-') + '</td>' +
       '</tr>';
   }).join('');
 }
@@ -222,6 +240,7 @@ document.getElementById('minScore').addEventListener('input', function () {
 });
 document.getElementById('stage2Only').addEventListener('change', render);
 document.getElementById('trendOnly').addEventListener('change', render);
+document.getElementById('smaTrackRecord').addEventListener('change', render);
 
 loadData();
 </script>
