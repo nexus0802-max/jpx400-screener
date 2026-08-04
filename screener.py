@@ -1,9 +1,26 @@
+"""
+サテライト銘柄スクリーナー v2 - Phase 2
+Phase 1（ファンダ複合スコア）に、RSランキング（対TOPIX超過リターン）を追加。
+
+RS計算方法：
+  各銘柄の「3ヶ月/6ヶ月/9ヶ月/12ヶ月リターン」を 0.4:0.2:0.2:0.2 で加重平均（IBD式）。
+  同じ計算をTOPIXにも行い、銘柄の加重リターン - TOPIXの加重リターン = 超過リターン。
+  超過リターンをJPX400内でパーセンタイル化したものを rs_percentile（0〜100）とする。
+
+株価データはPhase1で取得済みの10年分の終値をそのまま使うので、追加のAPI呼び出しは
+TOPIXベンチマーク1本のみ。
+"""
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import json
+import math
 from datetime import datetime, timezone, timedelta
 import os
+
+# TOPIX連動ETF（"^TOPX"の指数シンボルはyfinanceでの取得安定性に懸念があるため、
+# 流動性が高く通常の株価と同じ経路で確実に取得できるETFをベンチマークの代理として使う）
+BENCHMARK_TICKER = "1306.T"
 
 JPX400_TICKERS = [
     "1332","1414","1419","1518","1605","1662","1719","1721","1801","1802",
@@ -48,6 +65,8 @@ JPX400_TICKERS = [
     "9719","9735","9744","9759","9766","9843","9962","9983","9984","9989",
 ]
 
+# ---------- 既存ロジック（テクニカル）：そのまま流用 ----------
+
 def calc_rsi(prices, period=14):
     if len(prices) < period + 1:
         return 50
@@ -61,15 +80,12 @@ def calc_rsi(prices, period=14):
         al = (al * (period-1) + losses[i]) / period
     return 100 if al == 0 else float(100 - 100 / (1 + ag/al))
 
+
 def calc_adx_ci(highs, lows, closes, period=14, lookback=60):
-    """直近lookback本平均のADXとチョピネス指数(CI)を返す。データ不足時は(None, None)"""
     n = len(closes)
     if n < period * 2 + 1:
         return None, None
-
-    tr  = np.zeros(n)
-    pdm = np.zeros(n)
-    mdm = np.zeros(n)
+    tr  = np.zeros(n); pdm = np.zeros(n); mdm = np.zeros(n)
     for i in range(1, n):
         h, l, pc = highs[i], lows[i], closes[i-1]
         ph, pl = highs[i-1], lows[i-1]
@@ -77,28 +93,20 @@ def calc_adx_ci(highs, lows, closes, period=14, lookback=60):
         up, down = h - ph, pl - l
         pdm[i] = up if (up > down and up > 0) else 0
         mdm[i] = down if (down > up and down > 0) else 0
-
-    sm_tr  = np.full(n, np.nan)
-    sm_pdm = np.full(n, np.nan)
-    sm_mdm = np.full(n, np.nan)
-    sm_tr[period]  = tr[1:period+1].sum()
-    sm_pdm[period] = pdm[1:period+1].sum()
-    sm_mdm[period] = mdm[1:period+1].sum()
+    sm_tr = np.full(n, np.nan); sm_pdm = np.full(n, np.nan); sm_mdm = np.full(n, np.nan)
+    sm_tr[period] = tr[1:period+1].sum(); sm_pdm[period] = pdm[1:period+1].sum(); sm_mdm[period] = mdm[1:period+1].sum()
     for i in range(period + 1, n):
         sm_tr[i]  = sm_tr[i-1]  - sm_tr[i-1]/period  + tr[i]
         sm_pdm[i] = sm_pdm[i-1] - sm_pdm[i-1]/period + pdm[i]
         sm_mdm[i] = sm_mdm[i-1] - sm_mdm[i-1]/period + mdm[i]
-
     dx = np.full(n, np.nan)
     for i in range(period, n):
         if sm_tr[i] == 0:
             pdi = mdi = 0.0
         else:
-            pdi = 100 * sm_pdm[i] / sm_tr[i]
-            mdi = 100 * sm_mdm[i] / sm_tr[i]
+            pdi = 100 * sm_pdm[i] / sm_tr[i]; mdi = 100 * sm_mdm[i] / sm_tr[i]
         s = pdi + mdi
         dx[i] = 0 if s == 0 else 100 * abs(pdi - mdi) / s
-
     first_adx_idx = period * 2
     if first_adx_idx >= n:
         return None, None
@@ -106,21 +114,19 @@ def calc_adx_ci(highs, lows, closes, period=14, lookback=60):
     adx[first_adx_idx - 1] = np.mean(dx[period:first_adx_idx])
     for i in range(first_adx_idx, n):
         adx[i] = (adx[i-1] * (period - 1) + dx[i]) / period
-
     ci = np.full(n, np.nan)
     for i in range(period, n):
         window_tr = tr[i-period+1:i+1].sum()
-        hh = highs[i-period+1:i+1].max()
-        ll = lows[i-period+1:i+1].min()
+        hh = highs[i-period+1:i+1].max(); ll = lows[i-period+1:i+1].min()
         rng = hh - ll
         ci[i] = 100 * np.log10(window_tr / rng) / np.log10(period) if rng > 0 else 0
-
     start = max(0, n - lookback)
     adx_vals = adx[start:][~np.isnan(adx[start:])]
     ci_vals  = ci[start:][~np.isnan(ci[start:])]
     if len(adx_vals) == 0 or len(ci_vals) == 0:
         return None, None
     return float(np.mean(adx_vals)), float(np.mean(ci_vals))
+
 
 def classify_trend(adx, ci):
     if adx is None or ci is None:
@@ -131,52 +137,29 @@ def classify_trend(adx, ci):
         return "range"
     return "mid"
 
+
 def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20,
                       body_pct=50, max_bars_after_cross=10, stop_loss_pct=8,
                       min_body_to_range_pct=60):
-    """
-    SMA5/20戦略の簡易バックテスト（手数料0、スリッページなし）。
-    エントリー: シグナル翌日の始値で約定。損切りは当日の安値で判定（成行想定）。
-    利確（陰線でSMA5割れ）は終値で約定とする近似。
-    min_body_to_range_pct: 実体の大きさ÷値幅全体(高値-安値)の比率フィルター（ヒゲ主体の迷い足を除外）。
-
-    戻り値: dict（トレードが1件もない場合は None）
-      pf, trade_count, win_rate,
-      avg_bars_held, avg_return_pct,
-      avg_bars_win, avg_bars_loss, avg_return_win, avg_return_loss
-    """
     n = len(closes)
     if n < sma_slow_len + max_bars_after_cross + 5:
         return None
-
     sma5  = pd.Series(closes).rolling(sma_fast_len).mean().values
     sma20 = pd.Series(closes).rolling(sma_slow_len).mean().values
-
-    waiting = False
-    cross_i = -1
-    position = False
-    entry_price = 0.0
-    entry_index = -1
-    stop_price = 0.0
-    trades = []  # 各要素: (bars_held, return_pct, is_win)
-
+    waiting = False; cross_i = -1; position = False
+    entry_price = 0.0; entry_index = -1; stop_price = 0.0
+    trades = []
     start = sma_slow_len
     for i in range(start, n):
         if np.isnan(sma5[i]) or np.isnan(sma20[i]) or np.isnan(sma5[i-1]) or np.isnan(sma20[i-1]):
             continue
-
         golden = sma5[i-1] <= sma20[i-1] and sma5[i] > sma20[i]
         dead   = sma5[i-1] >= sma20[i-1] and sma5[i] < sma20[i]
-        if golden:
-            waiting = True
-            cross_i = i
-        if dead:
-            waiting = False
-
+        if golden: waiting = True; cross_i = i
+        if dead: waiting = False
         if position:
-            # 損切り判定（当日安値がストップ以下なら約定）
             if lows[i] <= stop_price:
-                exit_price = stop_price
+                exit_price = min(stop_price, opens[i])  # ギャップダウン対応済み
                 bars_held = i - entry_index
                 return_pct = (exit_price / entry_price - 1) * 100
                 trades.append((bars_held, return_pct, return_pct >= 0))
@@ -193,16 +176,12 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
         else:
             if waiting and (i - cross_i) <= max_bars_after_cross:
                 bullish = closes[i] > opens[i]
-                body_high = max(opens[i], closes[i])
-                body_low  = min(opens[i], closes[i])
+                body_high = max(opens[i], closes[i]); body_low = min(opens[i], closes[i])
                 body_size = body_high - body_low
                 if body_size > 0:
-                    if sma5[i] <= body_low:
-                        above_amt = body_size
-                    elif sma5[i] >= body_high:
-                        above_amt = 0.0
-                    else:
-                        above_amt = body_high - sma5[i]
+                    if sma5[i] <= body_low: above_amt = body_size
+                    elif sma5[i] >= body_high: above_amt = 0.0
+                    else: above_amt = body_high - sma5[i]
                     above_pct = above_amt / body_size * 100
                 else:
                     above_pct = 0.0
@@ -210,32 +189,23 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
                 body_to_range_pct = (body_size / total_range * 100) if total_range > 0 else 0.0
                 if (bullish and above_pct >= body_pct
                         and body_to_range_pct >= min_body_to_range_pct and i + 1 < n):
-                    entry_price = opens[i + 1]
-                    entry_index = i + 1
+                    entry_price = opens[i + 1]; entry_index = i + 1
                     stop_price  = entry_price * (1 - stop_loss_pct / 100)
-                    position = True
-                    waiting = False
-
+                    position = True; waiting = False
     if len(trades) == 0:
         return None
-
-    wins_sum   = sum(r for _, r, w in trades if w)
+    wins_sum = sum(r for _, r, w in trades if w)
     losses_sum = sum(-r for _, r, w in trades if not w)
     trade_count = len(trades)
-    win_trades  = [t for t in trades if t[2]]
+    win_trades = [t for t in trades if t[2]]
     loss_trades = [t for t in trades if not t[2]]
-
-    if losses_sum == 0:
-        pf = None if wins_sum == 0 else 999.0  # 負けトレードが皆無の場合の便宜的な上限値
-    else:
-        pf = wins_sum / losses_sum
+    pf = None if losses_sum == 0 and wins_sum == 0 else (999.0 if losses_sum == 0 else wins_sum / losses_sum)
 
     def _avg(vals):
         return float(np.mean(vals)) if len(vals) > 0 else None
 
     return {
-        "pf": pf,
-        "trade_count": trade_count,
+        "pf": pf, "trade_count": trade_count,
         "win_rate": round(len(win_trades) / trade_count * 100, 1),
         "avg_bars_held": _avg([t[0] for t in trades]),
         "avg_return_pct": _avg([t[1] for t in trades]),
@@ -244,6 +214,334 @@ def backtest_sma5_20(opens, highs, lows, closes, sma_fast_len=5, sma_slow_len=20
         "avg_return_win": _avg([t[1] for t in win_trades]),
         "avg_return_loss": _avg([t[1] for t in loss_trades]),
     }
+
+
+# ---------- 新規：VCP収縮パターン検出（旧vcp.htmlのJSロジックをPython移植） ----------
+
+def sma(arr, n):
+    if len(arr) < n:
+        return None
+    return float(np.mean(arr[-n:]))
+
+
+def sma_at(arr, n, end_idx_exclusive):
+    start = end_idx_exclusive - n
+    if start < 0:
+        return None
+    return float(np.mean(arr[start:end_idx_exclusive]))
+
+
+def find_swings(prices, order):
+    """左右order日間で最も高い/低い点をスイング高値・安値として検出し、
+    同種の極値が連続する場合はより極端な方だけを残す（元JSロジックと同一）。"""
+    n = len(prices)
+    raw = []
+    for i in range(order, n - order):
+        is_high = True
+        is_low = True
+        for k in range(i - order, i + order + 1):
+            if k == i:
+                continue
+            if prices[k] > prices[i]:
+                is_high = False
+            if prices[k] < prices[i]:
+                is_low = False
+        if is_high:
+            raw.append({"idx": i, "type": "high", "price": prices[i]})
+        elif is_low:
+            raw.append({"idx": i, "type": "low", "price": prices[i]})
+
+    cleaned = []
+    for p in raw:
+        if not cleaned:
+            cleaned.append(p)
+            continue
+        last = cleaned[-1]
+        if last["type"] == p["type"]:
+            if p["type"] == "high" and p["price"] >= last["price"]:
+                cleaned[-1] = p
+            if p["type"] == "low" and p["price"] <= last["price"]:
+                cleaned[-1] = p
+        else:
+            cleaned.append(p)
+    return cleaned
+
+
+def extract_contractions(swings):
+    """高値→安値のペアごとに収縮幅(%)を算出。"""
+    contractions = []
+    for i in range(len(swings) - 1):
+        if swings[i]["type"] == "high" and swings[i + 1]["type"] == "low":
+            high, low = swings[i], swings[i + 1]
+            pct = (high["price"] - low["price"]) / high["price"] * 100
+            contractions.append({
+                "highIdx": high["idx"], "lowIdx": low["idx"],
+                "highPrice": high["price"], "lowPrice": low["price"], "pct": pct,
+            })
+    return contractions
+
+
+def analyze_vcp(closes, volumes,
+                 above_52w_low=25, near_52w_high=25, ma200_slope_days=20,
+                 lookback_days=130, swing_order=4,
+                 min_contractions=2, max_contractions=5,
+                 final_pct=12, tolerance=0.20, pivot_pct=7):
+    """VCP（ボラティリティ収縮パターン）分析。旧vcp.htmlのデフォルトパラメータをそのまま踏襲。
+    filterで銘柄を弾かず、常にvcp_scoreを返す（統合スコア側で連続値として使うため）。"""
+    N = len(closes)
+    if N < 260:
+        return None
+    closes = np.asarray(closes, dtype=float)
+
+    latest = float(closes[-1])
+    ma50, ma150, ma200 = sma(closes, 50), sma(closes, 150), sma(closes, 200)
+    if ma50 is None or ma150 is None or ma200 is None:
+        return None
+
+    is_trend = latest > ma150 and ma150 > ma200
+    is_ma50_above = ma50 > ma150
+    ma200_past = sma_at(closes, 200, N - ma200_slope_days)
+    is_ma200_up = (ma200 > ma200_past) if ma200_past is not None else False
+
+    win52 = closes[-252:]
+    low52, high52 = float(np.min(win52)), float(np.max(win52))
+    above_low_pct = (latest - low52) / low52 * 100
+    below_high_pct = (high52 - latest) / high52 * 100
+
+    stage2_pass = (is_trend and is_ma50_above and is_ma200_up
+                   and above_low_pct >= above_52w_low and below_high_pct <= near_52w_high)
+
+    start = max(0, N - lookback_days)
+    window = closes[start:]
+    swings = find_swings(window.tolist(), swing_order)
+    contractions = extract_contractions(swings)
+    if len(contractions) > max_contractions:
+        contractions = contractions[-max_contractions:]
+    has_enough_contractions = len(contractions) >= min_contractions
+
+    is_monotonic = True
+    for i in range(1, len(contractions)):
+        if contractions[i]["pct"] > contractions[i - 1]["pct"] * (1 + tolerance):
+            is_monotonic = False
+            break
+
+    final_contraction = contractions[-1] if contractions else None
+    is_final_tight = (final_contraction["pct"] <= final_pct) if final_contraction else None
+
+    is_vol_dry_up = None
+    if final_contraction and volumes is not None and len(volumes) >= N:
+        volumes = np.asarray(volumes, dtype=float)
+        first = contractions[0]
+
+        def vol_slice(c):
+            a, b = start + c["highIdx"], start + c["lowIdx"]
+            lo, hi = min(a, b), max(a, b) + 1
+            seg = volumes[lo:hi]
+            return float(np.mean(seg)) if len(seg) else None
+
+        vol_first, vol_final = vol_slice(first), vol_slice(final_contraction)
+        if vol_first and vol_final:
+            is_vol_dry_up = vol_final < vol_first
+
+    dist_to_pivot_pct = None
+    is_near_pivot = None
+    if final_contraction:
+        pivot = final_contraction["highPrice"]
+        dist_to_pivot_pct = (pivot - latest) / pivot * 100
+        is_near_pivot = abs(dist_to_pivot_pct) <= pivot_pct
+
+    score = 0
+    if is_trend: score += 20
+    if is_ma50_above: score += 10
+    if is_ma200_up: score += 10
+    score += min(15, len(contractions) * 5)
+    if contractions:
+        if is_monotonic:
+            score += 20
+        else:
+            score -= 15  # 収縮が乱れている場合は明確に減点する（単に加点なしにするだけでは不十分なため）
+    if is_final_tight: score += 15
+    if final_contraction and final_contraction["pct"] <= final_pct / 2: score += 5
+    if is_vol_dry_up: score += 10
+    if is_near_pivot: score += 15
+
+    # 満点120点を0-100スケールに正規化（統合スコアでファンダ/RS/地合いスコアと同じスケールで扱うため）
+    SCORE_MAX = 120
+    score_normalized = max(0, min(100, round(score / SCORE_MAX * 100, 1)))
+
+    return {
+        "vcp_stage2_pass": bool(stage2_pass),
+        "vcp_above_52w_low_pct": round(above_low_pct, 2),
+        "vcp_below_52w_high_pct": round(below_high_pct, 2),
+        "vcp_contraction_count": len(contractions),
+        "vcp_contractions_pct": [round(c["pct"], 2) for c in contractions],
+        "vcp_has_enough_contractions": bool(has_enough_contractions),
+        "vcp_is_monotonic": is_monotonic if contractions else None,
+        "vcp_is_final_tight": is_final_tight,
+        "vcp_is_vol_dry_up": is_vol_dry_up,
+        "vcp_is_near_pivot": is_near_pivot,
+        "vcp_dist_to_pivot_pct": round(dist_to_pivot_pct, 2) if dist_to_pivot_pct is not None else None,
+        "vcp_score_raw": score,
+        "vcp_score": score_normalized,
+    }
+
+
+
+
+FUND_KEYS = ["trailing_pe", "price_to_book", "roe", "profit_margin",
+             "revenue_growth", "earnings_growth"]
+
+def fetch_fundamentals(ticker):
+    try:
+        t = f"{ticker}.T"
+        info = yf.Ticker(t).info
+        pe = info.get("trailingPE")
+        if pe is not None and pe <= 0:
+            pe = None
+        return {
+            "trailing_pe": pe,
+            "price_to_book": info.get("priceToBook"),
+            "roe": info.get("returnOnEquity"),
+            "profit_margin": info.get("profitMargins"),
+            "revenue_growth": info.get("revenueGrowth"),
+            "earnings_growth": info.get("earningsGrowth"),
+        }
+    except Exception as e:
+        print(f"  ファンダ取得エラー: {ticker} - {e}")
+        return {k: None for k in FUND_KEYS}
+
+
+def compute_fund_scores(records, weights=(0.30, 0.40, 0.30)):
+    df = pd.DataFrame(records)
+
+    def pct_rank(col, higher_is_better):
+        return df[col].rank(pct=True, ascending=higher_is_better)
+
+    per_score = pct_rank("trailing_pe", higher_is_better=False).fillna(0.5)
+    pbr_score = pct_rank("price_to_book", higher_is_better=False).fillna(0.5)
+    value_score = (per_score + pbr_score) / 2
+
+    roe_score = pct_rank("roe", higher_is_better=True).fillna(0.5)
+    margin_score = pct_rank("profit_margin", higher_is_better=True).fillna(0.5)
+    quality_score = (roe_score + margin_score) / 2
+
+    rev_score = pct_rank("revenue_growth", higher_is_better=True).fillna(0.5)
+    earn_score = pct_rank("earnings_growth", higher_is_better=True).fillna(0.5)
+    growth_score = (rev_score + earn_score) / 2
+
+    w_value, w_quality, w_growth = weights
+    fund_score = (value_score * w_value + quality_score * w_quality + growth_score * w_growth) * 100
+
+    df["fund_value_score"] = (value_score * 100).round(1)
+    df["fund_quality_score"] = (quality_score * 100).round(1)
+    df["fund_growth_score"] = (growth_score * 100).round(1)
+    df["fund_score"] = fund_score.round(1)
+    df["fund_percentile"] = (fund_score.rank(pct=True) * 100).round(1)
+    return df.to_dict(orient="records")
+
+
+# ---------- 新規：RSランキング（Phase2） ----------
+
+def calc_weighted_return(closes, w=(0.4, 0.2, 0.2, 0.2)):
+    """IBD式：3ヶ月(63営業日)/6ヶ月(126)/9ヶ月(189)/12ヶ月(252)リターンの加重平均。
+    データが足りない場合はNoneを返す。"""
+    n = len(closes)
+
+    def ret(days):
+        if n <= days:
+            return None
+        base = closes[-1 - days]
+        if base == 0:
+            return None
+        return closes[-1] / base - 1
+
+    r3, r6, r9, r12 = ret(63), ret(126), ret(189), ret(252)
+    if any(v is None for v in (r3, r6, r9, r12)):
+        return None
+    return w[0]*r3 + w[1]*r6 + w[2]*r9 + w[3]*r12
+
+
+def fetch_benchmark_data():
+    """TOPIX連動ETFのOHLCVを取得。加重リターン計算だけでなく地合い判定にも使うため、
+    Closeだけでなく高値・安値も含めて2年分取得する。"""
+    try:
+        df = yf.download(BENCHMARK_TICKER, period="2y", progress=False, auto_adjust=True)
+        if df is None or len(df) < 260:
+            print(f"  ベンチマーク({BENCHMARK_TICKER})のデータが不足しています")
+            return None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df = df.dropna(subset=["Close"])
+        if len(df) < 260:
+            return None
+        return df
+    except Exception as e:
+        print(f"  ベンチマーク取得エラー: {e}")
+        return None
+
+
+def regime_score(trend_class, above_ma200):
+    """トレンド判定とMA200との位置関係を組み合わせて地合いスコア(0-100)を出す。
+    ADXが高い＝トレンドが強い、というだけでは方向（上昇か下降か）が分からないため、
+    MA200より上にいるかどうかを必ず組み合わせる。"""
+    if trend_class is None or above_ma200 is None:
+        return 50  # データ不足時は中立扱い
+    table = {
+        ("trend", True): 100,
+        ("mid",   True): 70,
+        ("range", True): 55,
+        ("range", False): 45,
+        ("mid",   False): 40,
+        ("trend", False): 20,
+    }
+    return table.get((trend_class, above_ma200), 50)
+
+
+def compute_market_regime(bench_df):
+    """ベンチマーク自身にADX/CIトレンド判定を適用し、地合いスコアを算出する。"""
+    if bench_df is None:
+        return {
+            "trend_class": None, "adx": None, "ci": None,
+            "above_ma200": None, "ma200": None, "latest_close": None,
+            "regime_score": 50, "note": "ベンチマーク取得失敗のため中立(50)にフォールバック",
+        }
+    highs = bench_df["High"].astype(float).values
+    lows = bench_df["Low"].astype(float).values
+    closes = bench_df["Close"].astype(float).values
+    N = len(closes)
+    adx, ci = calc_adx_ci(highs, lows, closes)
+    trend_class = classify_trend(adx, ci)
+    ma200 = float(np.mean(closes[-200:])) if N >= 200 else float(np.mean(closes))
+    latest_close = float(closes[-1])
+    above_ma200 = bool(latest_close > ma200)
+    score = regime_score(trend_class, above_ma200)
+    return {
+        "trend_class": trend_class,
+        "adx": round(adx, 1) if adx is not None else None,
+        "ci": round(ci, 1) if ci is not None else None,
+        "above_ma200": above_ma200,
+        "ma200": round(ma200, 2),
+        "latest_close": round(latest_close, 2),
+        "regime_score": score,
+    }
+
+
+def compute_rs_scores(records, bench_return):
+    df = pd.DataFrame(records)
+    if bench_return is not None:
+        df["excess_return"] = df["weighted_return"] - bench_return
+        rs_basis = "excess_vs_topix"
+    else:
+        df["excess_return"] = df["weighted_return"]
+        rs_basis = "raw_return_fallback"
+    df["rs_percentile"] = (df["excess_return"].rank(pct=True) * 100).fillna(50.0).round(1)
+    df["excess_return"] = df["excess_return"].round(4)
+    df["weighted_return"] = df["weighted_return"].round(4) if "weighted_return" in df else None
+    df.attrs["rs_basis"] = rs_basis
+    return df.to_dict(orient="records"), rs_basis
+
+
+# ---------- 価格取得＋テクニカル＋ファンダ統合 ----------
 
 def fetch_and_analyze(ticker):
     try:
@@ -257,10 +555,10 @@ def fetch_and_analyze(ticker):
         if len(df) < 100:
             return None
 
-        opens   = df["Open"].astype(float).values
-        highs   = df["High"].astype(float).values
-        lows    = df["Low"].astype(float).values
-        closes  = df["Close"].astype(float).values
+        opens = df["Open"].astype(float).values
+        highs = df["High"].astype(float).values
+        lows = df["Low"].astype(float).values
+        closes = df["Close"].astype(float).values
         volumes = df["Volume"].astype(float).values
         N = len(closes)
 
@@ -270,21 +568,20 @@ def fetch_and_analyze(ticker):
         adx, ci = calc_adx_ci(highs, lows, closes)
         trend_class = classify_trend(adx, ci)
         bt = backtest_sma5_20(opens, highs, lows, closes)
+        fund = fetch_fundamentals(ticker)
+        weighted_return = calc_weighted_return(closes)
+        vcp = analyze_vcp(closes, volumes)
 
-        # ==== ウォークフォワード検証: 前半(IS)で選定 → 後半(OOS)で検証 ====
-        split = N // 2
-        bt_is = bt_oos = None
-        trend_class_is = None
-        if split >= 60 and (N - split) >= 60:
-            adx_is, ci_is = calc_adx_ci(highs[:split], lows[:split], closes[:split])
-            trend_class_is = classify_trend(adx_is, ci_is)
-            bt_is  = backtest_sma5_20(opens[:split], highs[:split], lows[:split], closes[:split])
-            bt_oos = backtest_sma5_20(opens[split:], highs[split:], lows[split:], closes[split:])
+        # 過熱感フィルター用：MA200からの乖離率、52週高値からの乖離率
+        extension_from_ma200_pct = round((latest_close / ma200 - 1) * 100, 2) if ma200 else None
+        lookback_52w = closes[-252:] if N >= 252 else closes
+        high_52w = float(np.max(lookback_52w))
+        dist_from_52w_high_pct = round((latest_close / high_52w - 1) * 100, 2)
 
         def r2(v):
             return round(v, 3) if v is not None else None
 
-        return {
+        rec = {
             "ticker": ticker,
             "rsi": round(rsi, 1),
             "ma200": round(ma200, 2),
@@ -296,25 +593,157 @@ def fetch_and_analyze(ticker):
             "pf": r2(bt["pf"]) if bt else None,
             "trade_count": bt["trade_count"] if bt else None,
             "win_rate": bt["win_rate"] if bt else None,
-            "avg_bars_held": r2(bt["avg_bars_held"]) if bt else None,
             "avg_return_pct": r2(bt["avg_return_pct"]) if bt else None,
-            "avg_bars_win": r2(bt["avg_bars_win"]) if bt else None,
-            "avg_bars_loss": r2(bt["avg_bars_loss"]) if bt else None,
-            "avg_return_win": r2(bt["avg_return_win"]) if bt else None,
-            "avg_return_loss": r2(bt["avg_return_loss"]) if bt else None,
-            "trend_class_is": trend_class_is,
-            "pf_is": r2(bt_is["pf"]) if bt_is else None,
-            "trades_is": bt_is["trade_count"] if bt_is else None,
-            "avg_return_pct_is": r2(bt_is["avg_return_pct"]) if bt_is else None,
-            "pf_oos": r2(bt_oos["pf"]) if bt_oos else None,
-            "trades_oos": bt_oos["trade_count"] if bt_oos else None,
-            "avg_return_pct_oos": r2(bt_oos["avg_return_pct"]) if bt_oos else None,
-            "closes":  [round(float(c), 2) for c in closes],
+            "weighted_return": weighted_return,
+            "extension_from_ma200_pct": extension_from_ma200_pct,
+            "dist_from_52w_high_pct": dist_from_52w_high_pct,
+            "closes": [round(float(c), 2) for c in closes],
             "volumes": [int(v) for v in volumes],
         }
+        rec.update(fund)
+        if vcp:
+            rec.update(vcp)
+        else:
+            rec.update({
+                "vcp_stage2_pass": False, "vcp_above_52w_low_pct": None,
+                "vcp_below_52w_high_pct": None, "vcp_contraction_count": 0,
+                "vcp_contractions_pct": [], "vcp_has_enough_contractions": False,
+                "vcp_is_monotonic": None, "vcp_is_final_tight": None,
+                "vcp_is_vol_dry_up": None, "vcp_is_near_pivot": None,
+                "vcp_dist_to_pivot_pct": None, "vcp_score": 0,
+            })
+        return rec
     except Exception as e:
         print(f"  エラー: {ticker} - {e}")
         return None
+
+
+# ---------- 新規：統合スコア（Phase5） ----------
+
+def compute_integrated_score(records, market_regime_score):
+    """fund_score・rs_percentile・vcp_scoreを統合し、地合いスコアで最終調整する。
+    tech_score = RS 50% + VCP 50%
+    integrated_score = sqrt(fund_score × tech_score) （幾何平均、どちらかが極端に低いと全体も下がる）
+    final_score = integrated_score × (0.5 + 0.5×地合いスコア/100)  地合いが悪くても最大50%引きまで（ゼロにはしない）
+    """
+    df = pd.DataFrame(records)
+    fund = (df["fund_score"].fillna(50) / 100).clip(lower=0, upper=1)
+    rs = (df["rs_percentile"].fillna(50) / 100).clip(lower=0, upper=1)
+    vcp = (df["vcp_score"].fillna(0) / 100).clip(lower=0, upper=1)
+
+    tech = 0.5 * rs + 0.5 * vcp
+    integrated = np.sqrt(fund * tech) * 100
+    regime_multiplier = 0.5 + 0.5 * (market_regime_score / 100)
+    final = integrated * regime_multiplier
+
+    df["tech_score"] = (tech * 100).round(1)
+    df["integrated_score"] = integrated.round(1)
+    df["regime_multiplier"] = round(regime_multiplier, 3)
+    df["final_score"] = final.round(1)
+    return df.to_dict(orient="records")
+
+
+# ---------- 新規：RSモメンタムのウォークフォワード検証（Phase5） ----------
+
+def calc_weighted_return_at(closes, end_idx, w=(0.4, 0.2, 0.2, 0.2)):
+    """calc_weighted_returnの、任意の時点(end_idx)版。"""
+    def ret(days):
+        base_idx = end_idx - days
+        if base_idx < 0:
+            return None
+        base = closes[base_idx]
+        if base == 0:
+            return None
+        return closes[end_idx] / base - 1
+    r3, r6, r9, r12 = ret(63), ret(126), ret(189), ret(252)
+    if any(v is None for v in (r3, r6, r9, r12)):
+        return None
+    return w[0]*r3 + w[1]*r6 + w[2]*r9 + w[3]*r12
+
+
+def forward_return(closes, start_idx, horizon=63):
+    end_idx = start_idx + horizon
+    if end_idx >= len(closes):
+        return None
+    base = closes[start_idx]
+    if base == 0:
+        return None
+    return closes[end_idx] / base - 1
+
+
+def collect_rs_samples(closes, sample_every=21, horizon=63):
+    """1銘柄の全期間から、sample_every日おきに(加重リターン, その後horizon日のフォワードリターン)の
+    ペアをサンプリングする。"""
+    n = len(closes)
+    samples = []
+    i = 252
+    while i + horizon < n:
+        wr = calc_weighted_return_at(closes, i)
+        fr = forward_return(closes, i, horizon)
+        if wr is not None and fr is not None:
+            samples.append((i, n, wr, fr))
+        i += sample_every
+    return samples
+
+
+def walkforward_rs_validation(closes_by_ticker, sample_every=21, horizon=63):
+    """全銘柄からサンプルを集め、各銘柄の価格データ期間内での相対位置（前半/後半）で
+    IS/OOSに分割。IS側でRS上位25%だったサンプル群と、それ以外のサンプル群について、
+    OOS側での平均フォワードリターンを比較する。
+
+    【注意】これは真の意味での「同じ日に他の391銘柄と比較した相対力」の検証ではなく、
+    各銘柄「自身の」過去の強い時期がその後の自分自身のリターンを予測できているか、
+    という簡易的な代理検証です（日付を横断して全銘柄をそろえるにはデータ取得方法の
+    変更が必要なため、今回はこの近似にとどめています）。
+    """
+    rows = []
+    for ticker, closes in closes_by_ticker.items():
+        for idx, n, wr, fr in collect_rs_samples(closes, sample_every, horizon):
+            rows.append({"ticker": ticker, "idx": idx, "n": n, "wr": wr, "fr": fr})
+    if not rows:
+        return None
+
+    df = pd.DataFrame(rows)
+    df["rel_pos"] = df["idx"] / df["n"]
+    is_df = df[df["rel_pos"] < 0.5]
+    oos_df = df[df["rel_pos"] >= 0.5]
+
+    def quintile_stats(d, label):
+        if len(d) < 20:
+            return {"note": f"{label}: サンプル数不足"}
+        thresh = d["wr"].quantile(0.75)
+        top = d[d["wr"] >= thresh]
+        rest = d[d["wr"] < thresh]
+        return {
+            "sample_count": len(d),
+            "top25pct_n": len(top),
+            "top25pct_avg_forward_return_pct": round(top["fr"].mean() * 100, 2),
+            "rest_n": len(rest),
+            "rest_avg_forward_return_pct": round(rest["fr"].mean() * 100, 2),
+        }
+
+    return {
+        "in_sample": quintile_stats(is_df, "IS"),
+        "out_of_sample": quintile_stats(oos_df, "OOS"),
+        "note": ("銘柄ごとの過去12ヶ月加重リターン(RS)上位25%サンプル vs それ以外について、"
+                 "その後約3ヶ月(63営業日)のフォワードリターンを比較。in_sample/out_of_sampleは"
+                 "各銘柄の価格データ期間の前半/後半（相対位置）で分割。真の同一時点での"
+                 "全銘柄横断比較ではなく、銘柄ごとの自己参照的な簡易検証である点に注意。"),
+    }
+
+
+def sanitize_nan(obj):
+    """PythonのNaNをJSON標準のnullに変換する（ブラウザのJSON.parseは裸のNaNトークンを
+    受け付けないため。json.dumpのデフォルト(allow_nan=True)はPython独自拡張でNaNをそのまま
+    書き出してしまい、それが原因でブラウザ側でJSONパースエラーになっていた）。"""
+    if isinstance(obj, float) and math.isnan(obj):
+        return None
+    if isinstance(obj, dict):
+        return {k: sanitize_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_nan(v) for v in obj]
+    return obj
+
 
 def main():
     JST = timezone(timedelta(hours=9))
@@ -323,194 +752,59 @@ def main():
     all_results = []
     total = len(JPX400_TICKERS)
 
+    print(f"ベンチマーク({BENCHMARK_TICKER})取得中...")
+    bench_df = fetch_benchmark_data()
+    bench_return = None
+    if bench_df is not None:
+        bench_closes = bench_df["Close"].astype(float).values
+        bench_return = calc_weighted_return(bench_closes)
+    print(f"  -> ベンチマーク加重リターン: {bench_return}")
+    market_regime = compute_market_regime(bench_df)
+    print(f"  -> 地合いスコア: {market_regime['regime_score']} "
+          f"(trend_class={market_regime['trend_class']}, above_ma200={market_regime['above_ma200']})")
+
     for i, ticker in enumerate(JPX400_TICKERS):
         print(f"[{i+1}/{total}] {ticker} 取得中...")
         result = fetch_and_analyze(ticker)
         if result:
             all_results.append(result)
-            print(f"  -> OK RSI={result['rsi']} 終値={result['latest_close']}")
+            print(f"  -> OK RSI={result['rsi']} 終値={result['latest_close']} "
+                  f"PER={result.get('trailing_pe')} 加重リターン={result.get('weighted_return')}")
         else:
             print(f"  -> スキップ")
+
+    print("ファンダ複合スコアを計算中...")
+    all_results = compute_fund_scores(all_results)
+
+    print("RSランキングを計算中...")
+    all_results, rs_basis = compute_rs_scores(all_results, bench_return)
+    print(f"  -> RS算出方式: {rs_basis}")
+
+    print("統合スコアを計算中...")
+    all_results = compute_integrated_score(all_results, market_regime["regime_score"])
+
+    print("RSモメンタムのウォークフォワード検証を実行中...")
+    closes_by_ticker = {r["ticker"]: r["closes"] for r in all_results if r.get("closes")}
+    rs_validation = walkforward_rs_validation(closes_by_ticker)
+    if rs_validation:
+        print(f"  -> IS : {rs_validation['in_sample']}")
+        print(f"  -> OOS: {rs_validation['out_of_sample']}")
 
     run_time = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     output = {
         "run_time": run_time,
         "ticker_count": len(all_results),
+        "benchmark_weighted_return": bench_return,
+        "rs_basis": rs_basis,
+        "market_regime": market_regime,
+        "rs_momentum_validation": rs_validation,
         "data": all_results,
     }
+    output = sanitize_nan(output)
     with open("docs/data.json", "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False)
-
-    with open("docs/index.html", "w", encoding="utf-8") as f:
-        f.write(f"""<!DOCTYPE html>
-<html lang="ja"><head><meta charset="UTF-8">
-<title>JPX400 スクリーナー</title>
-<style>body{{font-family:sans-serif;padding:2rem;background:#f5f5f0}}
-.card{{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.5rem;max-width:500px}}
-a{{color:#378ADD;display:block;margin:.5rem 0;font-size:15px}}</style></head>
-<body><div class="card">
-<h2>📊 JPX400 スクリーナー</h2>
-<p style="color:#666;margin:.5rem 0 1rem">更新: {run_time} / {len(all_results)}銘柄</p>
-<a href="screener.html">▶ パターンマッチング スクリーナー</a>
-<a href="breakout.html">▶ MA収束ブレイクアウト スクリーナー</a>
-<a href="vcp.html">▶ VCP（収縮パターン）スクリーナー</a>
-<a href="trend.html">▶ トレンド/レンジ 判定スクリーナー</a>
-</div></body></html>""")
-
-    write_trend_page()
+        json.dump(output, f, ensure_ascii=False, allow_nan=False)
 
     print(f"\n完了: {len(all_results)}銘柄 -> docs/data.json")
-
-def write_trend_page():
-    html = """<!DOCTYPE html>
-<html lang="ja"><head><meta charset="UTF-8">
-<title>トレンド/レンジ 判定スクリーナー</title>
-<style>
-body{font-family:sans-serif;padding:2rem;background:#f5f5f0;color:#222}
-.card{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.5rem;max-width:900px;margin:0 auto}
-table{width:100%;border-collapse:collapse;font-size:13px;margin-top:1rem}
-th{text-align:left;padding:8px 6px;border-bottom:1px solid #ccc;cursor:pointer;color:#666}
-td{padding:8px 6px;border-bottom:1px solid #eee}
-.badge{font-size:12px;padding:2px 8px;border-radius:6px}
-.trend{background:#EAF3DE;color:#27500A}
-.range{background:#FCEBEB;color:#791F1F}
-.mid{background:#F1EFE8;color:#444441}
-a.back{color:#378ADD;font-size:14px}
-</style></head>
-<body><div class="card">
-<a class="back" href="index.html">&larr; 戻る</a>
-<h2>トレンド/レンジ 判定スクリーナー</h2>
-<p style="color:#666" id="meta"></p>
-<canvas id="scatter" style="max-height:340px"></canvas>
-<div id="groupStats" style="display:flex; gap:12px; margin:1rem 0; flex-wrap:wrap;"></div>
-<h3 style="margin:1.5rem 0 .5rem;font-size:15px;">保有日数・リターンの分布（銘柄ごとの平均値、392銘柄）</h3>
-<canvas id="holdReturnScatter" style="max-height:320px"></canvas>
-<div style="display:flex; gap:16px; margin-top:1rem; flex-wrap:wrap;">
-  <div style="flex:1; min-width:280px;"><canvas id="barsHeldHist" style="max-height:260px"></canvas></div>
-  <div style="flex:1; min-width:280px;"><canvas id="returnHist" style="max-height:260px"></canvas></div>
-</div>
-<table id="tbl"><thead><tr>
-<th data-k="ticker">銘柄</th><th data-k="adx">平均ADX</th><th data-k="ci">平均CI</th><th data-k="trend_class">判定</th><th data-k="pf">PF</th><th data-k="trade_count">回数</th><th data-k="win_rate">勝率%</th><th data-k="avg_bars_held">平均保有日数</th><th data-k="avg_return_pct">平均リターン%</th>
-</tr></thead><tbody></tbody></table>
-</div>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-const label = c => c==='trend' ? 'トレンド向き' : c==='range' ? 'レンジ・往来' : '中間';
-let sortKey='pf', sortDir=-1;
-fetch('data.json').then(r=>r.json()).then(d=>{
-  const rows = d.data.filter(r=>r.adx!=null && r.ci!=null);
-  document.getElementById('meta').textContent = `更新: ${d.run_time} / 判定対象 ${rows.length}銘柄（SMA5/20戦略PF・手数料0・損切り8%）`;
-  function render(){
-    const sorted = rows.slice().sort((a,b)=>{
-      if (sortKey==='ticker'||sortKey==='trend_class') return sortDir*String(a[sortKey]).localeCompare(String(b[sortKey]));
-      const av = a[sortKey]==null ? -Infinity : a[sortKey];
-      const bv = b[sortKey]==null ? -Infinity : b[sortKey];
-      return sortDir*(av-bv);
-    });
-    document.querySelector('#tbl tbody').innerHTML = sorted.map(r=>
-      `<tr><td>${r.ticker}</td><td>${r.adx.toFixed(1)}</td><td>${r.ci.toFixed(1)}</td>`+
-      `<td><span class="badge ${r.trend_class}">${label(r.trend_class)}</span></td>`+
-      `<td>${r.pf!=null ? r.pf.toFixed(3) : '-'}</td><td>${r.trade_count!=null ? r.trade_count : '-'}</td>`+
-      `<td>${r.win_rate!=null ? r.win_rate.toFixed(1) : '-'}</td>`+
-      `<td>${r.avg_bars_held!=null ? r.avg_bars_held.toFixed(1) : '-'}</td>`+
-      `<td>${r.avg_return_pct!=null ? r.avg_return_pct.toFixed(2) : '-'}</td></tr>`).join('');
-  }
-  document.querySelectorAll('th[data-k]').forEach(th=>th.addEventListener('click',()=>{
-    const k=th.dataset.k;
-    if(sortKey===k) sortDir*=-1; else {sortKey=k; sortDir = (k==='ticker'||k==='trend_class')?1:-1;}
-    render();
-  }));
-  render();
-  const groups = {trend:[], mid:[], range:[]};
-  rows.forEach(r=>{ if (r.pf!=null && groups[r.trend_class]) groups[r.trend_class].push(r.pf); });
-  const gLabel = {trend:'トレンド向き', mid:'中間', range:'レンジ・往来'};
-  document.getElementById('groupStats').innerHTML = Object.keys(groups).map(k=>{
-    const arr = groups[k];
-    const avg = arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length).toFixed(3) : '-';
-    return `<div style="background:#f5f5f0;border-radius:8px;padding:.75rem 1rem;min-width:140px;">`+
-      `<div style="font-size:12px;color:#666;">${gLabel[k]}（n=${arr.length}）</div>`+
-      `<div style="font-size:20px;font-weight:600;">平均PF ${avg}</div></div>`;
-  }).join('');
-
-  // ==== ウォークフォワード検証: 前半でトレンド向き&PF>1選定 → 後半の成績 ====
-  const MIN_TRADES = 15;
-  const isSelected = rows.filter(r => r.trend_class_is==='trend' && r.pf_is!=null && r.pf_is>1
-      && r.trades_is!=null && r.trades_is>=MIN_TRADES && r.pf_oos!=null && r.trades_oos>=MIN_TRADES);
-  const others = rows.filter(r => !(r.trend_class_is==='trend' && r.pf_is!=null && r.pf_is>1)
-      && r.pf_oos!=null && r.trades_oos>=MIN_TRADES);
-  const avgOf = arr => arr.length ? (arr.reduce((a,b)=>a+b.pf_oos,0)/arr.length).toFixed(3) : '-';
-  const wfDiv = document.createElement('div');
-  wfDiv.style.cssText = 'margin:1.5rem 0;padding:1rem;background:#F5F5F0;border-radius:8px;';
-  wfDiv.innerHTML = `<div style="font-weight:600;margin-bottom:.5rem;">ウォークフォワード検証：前半データで「トレンド向き かつ PF&gt;1」を選定 → 後半期間の成績</div>`+
-    `<div style="display:flex;gap:24px;flex-wrap:wrap;">`+
-    `<div><div style="font-size:12px;color:#666;">前半で選定された銘柄（n=${isSelected.length}）の後半平均PF</div><div style="font-size:22px;font-weight:600;">${avgOf(isSelected)}</div></div>`+
-    `<div><div style="font-size:12px;color:#666;">それ以外の銘柄（n=${others.length}）の後半平均PF</div><div style="font-size:22px;font-weight:600;">${avgOf(others)}</div></div>`+
-    `</div><div style="font-size:12px;color:#888;margin-top:.5rem;">トレード回数${MIN_TRADES}回未満の期間は除外。前半のみの情報で選定し、後半は一切参照していません。</div>`;
-  document.getElementById('groupStats').after(wfDiv);
-
-  // ==== ウォークフォワード検証: 前半の平均リターン上位25% → 後半の平均リターン ====
-  const withIS = rows.filter(r => r.avg_return_pct_is!=null && r.trades_is>=MIN_TRADES
-      && r.avg_return_pct_oos!=null && r.trades_oos>=MIN_TRADES);
-  const byReturnIs = withIS.slice().sort((a,b)=> b.avg_return_pct_is - a.avg_return_pct_is);
-  const topN = Math.floor(byReturnIs.length / 4); // 上位25%
-  const topGroup = byReturnIs.slice(0, topN);
-  const restGroup = byReturnIs.slice(topN);
-  const avgOosReturn = arr => arr.length ? (arr.reduce((a,b)=>a+b.avg_return_pct_oos,0)/arr.length).toFixed(3) : '-';
-  const wfReturnDiv = document.createElement('div');
-  wfReturnDiv.style.cssText = 'margin:1.5rem 0;padding:1rem;background:#F5F5F0;border-radius:8px;';
-  wfReturnDiv.innerHTML = `<div style="font-weight:600;margin-bottom:.5rem;">ウォークフォワード検証：前半の「平均リターンが高い上位25%」を選定 → 後半期間の平均リターン</div>`+
-    `<div style="display:flex;gap:24px;flex-wrap:wrap;">`+
-    `<div><div style="font-size:12px;color:#666;">前半上位25%だった銘柄（n=${topGroup.length}）の後半平均リターン%</div><div style="font-size:22px;font-weight:600;">${avgOosReturn(topGroup)}</div></div>`+
-    `<div><div style="font-size:12px;color:#666;">それ以外の銘柄（n=${restGroup.length}）の後半平均リターン%</div><div style="font-size:22px;font-weight:600;">${avgOosReturn(restGroup)}</div></div>`+
-    `</div><div style="font-size:12px;color:#888;margin-top:.5rem;">トレード回数${MIN_TRADES}回未満の期間は除外。前半の平均リターンのみで選定し、後半は一切参照していません。</div>`;
-  wfDiv.after(wfReturnDiv);
-
-  const colors = {trend:'#1D9E75', range:'#D85A30', mid:'#888780'};
-  new Chart(document.getElementById('scatter'), {
-    type:'scatter',
-    data:{datasets:[{label:'銘柄', data:rows.map(r=>({x:r.ci,y:r.adx,ticker:r.ticker})),
-      backgroundColor: rows.map(r=>colors[r.trend_class])}]},
-    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.raw.ticker} ADX:${c.raw.y.toFixed(1)} CI:${c.raw.x.toFixed(1)}`}}},
-      scales:{x:{title:{display:true,text:'チョピネス指数（低いほどトレンド）'}}, y:{title:{display:true,text:'ADX（高いほどトレンド）'}}}}
-  });
-
-  // ==== 平均保有日数 × 平均リターン% の散布図 ====
-  const distRows = rows.filter(r => r.avg_bars_held!=null && r.avg_return_pct!=null);
-  new Chart(document.getElementById('holdReturnScatter'), {
-    type:'scatter',
-    data:{datasets:[{label:'銘柄', data:distRows.map(r=>({x:r.avg_bars_held,y:r.avg_return_pct,ticker:r.ticker})),
-      backgroundColor: distRows.map(r=>colors[r.trend_class])}]},
-    options:{plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>`${c.raw.ticker} 保有${c.raw.x.toFixed(1)}日 / リターン${c.raw.y.toFixed(2)}%`}}},
-      scales:{x:{title:{display:true,text:'平均保有日数'}}, y:{title:{display:true,text:'平均リターン（%）'}}}}
-  });
-
-  // ==== ヒストグラム共通関数 ====
-  function makeHistogram(canvasId, values, binCount, xTitle){
-    if (values.length === 0) return;
-    const min = Math.min(...values), max = Math.max(...values);
-    const width = (max - min) / binCount || 1;
-    const bins = new Array(binCount).fill(0);
-    values.forEach(v=>{
-      let idx = Math.floor((v - min) / width);
-      if (idx >= binCount) idx = binCount - 1;
-      if (idx < 0) idx = 0;
-      bins[idx]++;
-    });
-    const labels = bins.map((_, i)=> (min + i*width).toFixed(1));
-    new Chart(document.getElementById(canvasId), {
-      type: 'bar',
-      data: { labels, datasets: [{ label: '銘柄数', data: bins, backgroundColor: '#378ADD' }] },
-      options: { plugins:{legend:{display:false}},
-        scales: { x: { title: { display:true, text: xTitle } }, y: { title:{ display:true, text:'銘柄数' }, ticks:{ precision:0 } } } }
-    });
-  }
-  makeHistogram('barsHeldHist', distRows.map(r=>r.avg_bars_held), 20, '平均保有日数');
-  makeHistogram('returnHist', distRows.map(r=>r.avg_return_pct), 20, '平均リターン（%）');
-});
-</script>
-</body></html>"""
-    with open("docs/trend.html", "w", encoding="utf-8") as f:
-        f.write(html)
 
 if __name__ == "__main__":
     main()
