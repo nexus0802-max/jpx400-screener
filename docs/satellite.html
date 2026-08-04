@@ -73,6 +73,7 @@ tbody td{padding:8px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
       <thead><tr>
         <th data-k="rank">#</th>
         <th data-k="ticker">銘柄</th>
+        <th data-k="company_name">企業名</th>
         <th data-k="latest_close">株価</th>
         <th data-k="final_score">Final</th>
         <th data-k="fund_score">Fund</th>
@@ -191,6 +192,7 @@ function render() {
     return '<tr>' +
       '<td>' + (i + 1) + '</td>' +
       '<td><strong>' + r.ticker + '</strong></td>' +
+      '<td style="white-space:normal;max-width:180px">' + (r.company_name || '-') + '</td>' +
       '<td>' + (r.latest_close != null ? r.latest_close.toLocaleString() : '-') + '</td>' +
       '<td>' + scoreBar(r.final_score) + '</td>' +
       '<td>' + (r.fund_score != null ? r.fund_score.toFixed(1) : '-') + '</td>' +
