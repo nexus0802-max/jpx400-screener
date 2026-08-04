@@ -399,6 +399,7 @@ def fetch_fundamentals(ticker):
         if pe is not None and pe <= 0:
             pe = None
         return {
+            "company_name": info.get("shortName") or info.get("longName"),
             "trailing_pe": pe,
             "price_to_book": info.get("priceToBook"),
             "roe": info.get("returnOnEquity"),
@@ -408,7 +409,7 @@ def fetch_fundamentals(ticker):
         }
     except Exception as e:
         print(f"  ファンダ取得エラー: {ticker} - {e}")
-        return {k: None for k in FUND_KEYS}
+        return {"company_name": None, **{k: None for k in FUND_KEYS}}
 
 
 def compute_fund_scores(records, weights=(0.30, 0.40, 0.30)):
