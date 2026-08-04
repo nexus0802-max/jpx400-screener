@@ -573,6 +573,16 @@ def fetch_and_analyze(ticker):
         weighted_return = calc_weighted_return(closes)
         vcp = analyze_vcp(closes, volumes)
 
+        # ==== trend.html用：ウォークフォワード検証（前半IS→後半OOS） ====
+        split = N // 2
+        bt_is = bt_oos = None
+        trend_class_is = None
+        if split >= 60 and (N - split) >= 60:
+            adx_is, ci_is = calc_adx_ci(highs[:split], lows[:split], closes[:split])
+            trend_class_is = classify_trend(adx_is, ci_is)
+            bt_is = backtest_sma5_20(opens[:split], highs[:split], lows[:split], closes[:split])
+            bt_oos = backtest_sma5_20(opens[split:], highs[split:], lows[split:], closes[split:])
+
         # 過熱感フィルター用：MA200からの乖離率、52週高値からの乖離率
         extension_from_ma200_pct = round((latest_close / ma200 - 1) * 100, 2) if ma200 else None
         lookback_52w = closes[-252:] if N >= 252 else closes
@@ -594,7 +604,15 @@ def fetch_and_analyze(ticker):
             "pf": r2(bt["pf"]) if bt else None,
             "trade_count": bt["trade_count"] if bt else None,
             "win_rate": bt["win_rate"] if bt else None,
+            "avg_bars_held": r2(bt["avg_bars_held"]) if bt else None,
             "avg_return_pct": r2(bt["avg_return_pct"]) if bt else None,
+            "trend_class_is": trend_class_is,
+            "pf_is": r2(bt_is["pf"]) if bt_is else None,
+            "trades_is": bt_is["trade_count"] if bt_is else None,
+            "avg_return_pct_is": r2(bt_is["avg_return_pct"]) if bt_is else None,
+            "pf_oos": r2(bt_oos["pf"]) if bt_oos else None,
+            "trades_oos": bt_oos["trade_count"] if bt_oos else None,
+            "avg_return_pct_oos": r2(bt_oos["avg_return_pct"]) if bt_oos else None,
             "weighted_return": weighted_return,
             "extension_from_ma200_pct": extension_from_ma200_pct,
             "dist_from_52w_high_pct": dist_from_52w_high_pct,
