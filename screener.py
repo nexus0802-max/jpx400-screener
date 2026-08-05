@@ -572,6 +572,7 @@ def fetch_and_analyze(ticker):
         fund = fetch_fundamentals(ticker)
         weighted_return = calc_weighted_return(closes)
         vcp = analyze_vcp(closes, volumes)
+        gap = analyze_gaps(opens, closes)
 
         # ==== trend.html用：ウォークフォワード検証（前半IS→後半OOS） ====
         split = N // 2
@@ -631,10 +632,102 @@ def fetch_and_analyze(ticker):
                 "vcp_is_vol_dry_up": None, "vcp_is_near_pivot": None,
                 "vcp_dist_to_pivot_pct": None, "vcp_score": 0,
             })
+        if gap:
+            rec.update(gap)
+        else:
+            rec.update({
+                "gap_type": None, "gap_score": None, "gap_days_ago": None,
+                "gap_pct_at_event": None, "gap_down_recovery_pct": None,
+                "gap_up_continuation_pct": None, "gap_up_filled": None,
+            })
         return rec
     except Exception as e:
         print(f"  エラー: {ticker} - {e}")
         return None
+
+
+# ---------- 新規：ギャップ分析（下げた後の戻り／上げた後の伸び） ----------
+
+def analyze_gaps(opens, closes, lookback_days=60, pctile_down=2, pctile_up=98,
+                  trough_window=10, abs_floor_pct=5.0):
+    """直近lookback_days以内で、その銘柄にとって統計的に大きい部類のギャップ
+    （下位pctile_down% or 上位pctile_up%、かつ絶対値でabs_floor_pct%以上）のうち、
+    ギャップ幅の絶対値が最大のものを1つ選び、下ギャップなら戻り率、上ギャップなら継続率を点数化する。
+    abs_floor_pctは、値動きの穏やかな銘柄で「統計的には上位2%だが実際は1%程度の些細な変動」を
+    誤検出しないための下限フィルター。
+    【重要】下ギャップの戻りスコアと上ギャップの継続スコアを直接比較して選ぶと、
+    些細な下ギャップでも分母（下げ幅）が小さいと見かけ上高得点になってしまうバグがあったため、
+    「まずギャップ幅の絶対値が最大のイベントを1つ選ぶ→その種類に応じてスコアを計算する」
+    という順序にしている。"""
+    N = len(closes)
+    if N < 300:
+        return None
+    opens = np.asarray(opens, dtype=float)
+    closes = np.asarray(closes, dtype=float)
+
+    gap_pct = np.full(N, np.nan)
+    for i in range(1, N):
+        prev_close = closes[i - 1]
+        if prev_close != 0:
+            gap_pct[i] = (opens[i] - prev_close) / prev_close * 100
+
+    valid_gaps = gap_pct[~np.isnan(gap_pct)]
+    if len(valid_gaps) < 200:
+        return None
+
+    down_threshold = np.percentile(valid_gaps, pctile_down)
+    up_threshold = np.percentile(valid_gaps, pctile_up)
+
+    start = max(1, N - lookback_days)
+
+    best_idx = None
+    best_type = None
+    best_abs = -1.0
+    for i in range(start, N):
+        g = gap_pct[i]
+        if np.isnan(g):
+            continue
+        if g <= down_threshold and abs(g) >= abs_floor_pct and abs(g) > best_abs:
+            best_idx, best_type, best_abs = i, "down", abs(g)
+        elif g >= up_threshold and abs(g) >= abs_floor_pct and abs(g) > best_abs:
+            best_idx, best_type, best_abs = i, "up", abs(g)
+
+    result = {
+        "gap_type": None, "gap_score": None, "gap_days_ago": None, "gap_pct_at_event": None,
+        "gap_down_recovery_pct": None, "gap_up_continuation_pct": None, "gap_up_filled": None,
+    }
+    if best_idx is None:
+        return result
+
+    latest_close = float(closes[-1])
+    idx = best_idx
+    result["gap_days_ago"] = N - 1 - idx
+    result["gap_pct_at_event"] = round(float(gap_pct[idx]), 2)
+
+    if best_type == "down" and idx >= 1:
+        pre_gap_close = closes[idx - 1]
+        trough_end = min(N, idx + trough_window)
+        trough = float(np.min(closes[idx:trough_end]))
+        if pre_gap_close > trough:
+            recovery_pct = (latest_close - trough) / (pre_gap_close - trough) * 100
+        else:
+            recovery_pct = 100.0
+        score = max(0.0, min(100.0, recovery_pct))
+        result["gap_type"] = "down_recovery"
+        result["gap_score"] = round(score, 1)
+        result["gap_down_recovery_pct"] = round(recovery_pct, 1)
+    elif best_type == "up":
+        pre_gap_close = closes[idx - 1]
+        gap_day_close = closes[idx]
+        gap_filled = bool(latest_close < pre_gap_close)
+        continuation_pct = ((latest_close - gap_day_close) / gap_day_close * 100) if gap_day_close != 0 else 0.0
+        score = 0.0 if gap_filled else max(0.0, min(100.0, continuation_pct * 3))
+        result["gap_type"] = "up_continuation"
+        result["gap_score"] = round(score, 1)
+        result["gap_up_continuation_pct"] = round(continuation_pct, 1)
+        result["gap_up_filled"] = gap_filled
+
+    return result
 
 
 # ---------- 新規：統合スコア（Phase5） ----------
