@@ -19,15 +19,13 @@ jobs:
           python-version: '3.11'
       - name: install
         run: pip install yfinance pandas numpy
-      - name: run trend/range screener (legacy, feeds trend.html)
+      - name: run
         run: python screener.py
-      - name: run satellite screener (fund x technical, feeds satellite.html)
-        run: python screener_v2_phase5.py
       - name: push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/data.json docs/data_satellite.json docs/index.html docs/trend.html docs/satellite.html
+          git add docs/data.json docs/index.html docs/trend.html docs/satellite.html
           git diff --staged --quiet || git commit -m "update"
           git push origin main || (
             git pull origin main --no-rebase -X ours &&
