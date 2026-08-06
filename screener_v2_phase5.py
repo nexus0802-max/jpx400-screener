@@ -801,7 +801,7 @@ def main():
         "data": all_results,
     }
     output = sanitize_nan(output)
-with open("docs/data_satellite.json", "w", encoding="utf-8") as f:
+    with open("docs/data_satellite.json", "w", encoding="utf-8") as f:
         json.dump(output, f, ensure_ascii=False, allow_nan=False)
 
     print(f"\n完了: {len(all_results)}銘柄 -> docs/data_satellite.json")
