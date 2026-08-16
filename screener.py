@@ -591,7 +591,7 @@ def calc_momentum_63d(closes):
     return float(closes[-1] / base - 1) * 100
 
 
-
+def fetch_and_analyze(ticker):
     try:
         t = f"{ticker}.T"
         df = yf.download(t, period="10y", progress=False, auto_adjust=True)
