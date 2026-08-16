@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EMA9/21 BUY SIGNALS｜MARKET DESK</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;background:#f5f5f0;color:#1a1a1a;font-size:15px}
+.wrap{max-width:1100px;margin:0 auto;padding:1.5rem 1rem}
+.back-link{font-size:13px;color:#378ADD;text-decoration:none;display:inline-block;margin-bottom:1rem}
+.category{font-size:11px;font-weight:700;color:#378ADD;letter-spacing:.06em;margin-bottom:.3rem}
+h1{font-size:21px;font-weight:600;margin-bottom:.6rem;display:flex;align-items:center;gap:8px}
+.desc{color:#666;font-size:13px;line-height:1.7;margin-bottom:1.25rem}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:1.25rem}
+.card{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1rem 1.1rem}
+.card-label{font-size:11px;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem}
+.card-val{font-size:22px;font-weight:700}
+.card-sub{font-size:11px;color:#999;margin-top:.2rem}
+.panel{background:#fff;border-radius:12px;border:1px solid #e5e5e5;padding:1.25rem 1.5rem;margin-bottom:1.25rem}
+.status-bar{font-size:13px;padding:.6rem 1rem;border-radius:8px;margin-bottom:1rem}
+.ok{background:#e8f5e0;color:#2d6a0a}
+.err{background:#fce8e8;color:#a32d2d}
+.loading{background:#f0f0f0;color:#666}
+.toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:1rem}
+.hint{font-size:12px;color:#999}
+button.action{font-size:13px;padding:8px 16px;border:1px solid #378ADD;border-radius:8px;background:#378ADD;color:#fff;cursor:pointer;font-weight:600}
+button.action.secondary{background:#fff;color:#378ADD}
+button.action:hover{opacity:.85}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{font-size:11px;font-weight:600;color:#888;text-align:left;padding:8px 10px;border-bottom:1px solid #e5e5e5;text-transform:uppercase;white-space:nowrap}
+tbody tr:hover{background:#fafafa}
+tbody td{padding:9px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
+.badge{display:inline-block;font-size:11px;padding:2px 9px;border-radius:5px;font-weight:600}
+.wk-ok{background:#e8f5e0;color:#2d6a0a}
+.wk-ng{background:#fce8e8;color:#a32d2d}
+.wk-na{background:#f1efe8;color:#888}
+.mom-pos{color:#2d6a0a;font-weight:600}
+.chart-link{color:#378ADD;text-decoration:none;font-size:12px}
+.empty{text-align:center;padding:3rem;color:#aaa;font-size:14px}
+.datasrc{display:flex;gap:6px;align-items:center;font-size:12px;color:#888;margin-top:1rem;padding-top:1rem;border-top:1px solid #f0f0f0}
+.datasrc input{font-size:12px;padding:3px 6px;border:1px solid #ddd;border-radius:4px;width:220px}
+.datasrc button{font-size:12px;padding:4px 10px;border:1px solid #ddd;border-radius:4px;background:#f8f8f8;cursor:pointer}
+</style>
+</head>
+<body>
+<div class="wrap">
+<a href="index.html" class="back-link">&larr; トップへ戻る</a>
+<div class="category">JPX400 / RANK 1 STRATEGY</div>
+<h1>⚡ EMA9/21 BUY SIGNALS</h1>
+<p class="desc">
+  その日に日足のBUYが確定した銘柄だけを、63日モメンタムの高い順に表示します。<br>
+  週足OK・NGは参考情報で、NGも除外しません。
+</p>
+
+<div id="statusBar" class="panel status-bar loading">⏳ データを読み込み中...</div>
+
+<div class="cards">
+  <div class="card">
+    <div class="card-label">本日のBUY</div>
+    <div class="card-val" id="cardBuyCount">-</div>
+    <div class="card-sub">銘柄</div>
+  </div>
+  <div class="card">
+    <div class="card-label">週足OK</div>
+    <div class="card-val" id="cardWeeklyOk">-</div>
+    <div class="card-sub" id="cardWeeklyOkSub">銘柄</div>
+  </div>
+  <div class="card">
+    <div class="card-label">取得成功</div>
+    <div class="card-val" id="cardFetch">-</div>
+    <div class="card-sub">/ 400</div>
+  </div>
+  <div class="card">
+    <div class="card-label">シグナル日</div>
+    <div class="card-val" id="cardSignalDate" style="font-size:17px">-</div>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="toolbar">
+    <span class="hint">上位ほど直近約3か月の上昇率が高い銘柄です。同日に候補が多い場合の優先順位として使います。</span>
+    <div style="display:flex;gap:8px">
+      <button class="action secondary" onclick="loadData()">最新データで更新</button>
+      <button class="action" onclick="downloadCsv()">ランキングCSVを保存</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto">
+    <table>
+      <thead><tr>
+        <th>順位</th>
+        <th>コード</th>
+        <th>銘柄名</th>
+        <th>63日モメンタム</th>
+        <th>週足</th>
+        <th>終値</th>
+        <th>売買タイミング</th>
+        <th>チャート</th>
+      </tr></thead>
+      <tbody id="resultTb"></tbody>
+    </table>
+  </div>
+  <div id="emptyMsg" class="empty" style="display:none">
+    <div style="font-size:36px;margin-bottom:.5rem">📭</div>
+    <p>本日、日足BUYが確定した銘柄はありません。</p>
+  </div>
+
+  <div class="datasrc">
+    <span>データソース:</span>
+    <input type="text" id="dataSrc" value="data.json">
+    <button onclick="loadData()">再読み込み</button>
+  </div>
+</div>
+
+</div>
+
+<script>
+let ranking = [];
+let signalDate = null;
+
+async function loadData() {
+  const bar = document.getElementById('statusBar');
+  const src = document.getElementById('dataSrc').value.trim() || 'data.json';
+  bar.className = 'panel status-bar loading';
+  bar.textContent = '⏳ データを読み込み中...';
+  try {
+    const res = await fetch(src + '?t=' + Date.now());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const raw = await res.json();
+    if (!raw.data || raw.data.length === 0) throw new Error('データが空です');
+
+    const summary = raw.ema_signal_summary || {};
+    signalDate = summary.signal_date || null;
+
+    // ① BUY判定 → ② BUY銘柄抽出 → ③ モメンタム計算(取得済み) → ④ ランキング
+    const buySignals = raw.data.filter(function (r) { return r.daily_buy_signal === true; });
+    ranking = buySignals.slice().sort(function (a, b) {
+      const av = a.momentum_63d == null ? -Infinity : a.momentum_63d;
+      const bv = b.momentum_63d == null ? -Infinity : b.momentum_63d;
+      if (bv !== av) return bv - av;
+      return String(a.ticker).localeCompare(String(b.ticker)); // 同率時のセカンダリソート
+    });
+
+    const weeklyOkCount = summary.weekly_ok_count != null
+      ? summary.weekly_ok_count
+      : buySignals.filter(function (r) { return r.weekly_status === 'OK'; }).length;
+
+    document.getElementById('cardBuyCount').textContent = (summary.buy_signal_count != null ? summary.buy_signal_count : buySignals.length);
+    document.getElementById('cardWeeklyOk').textContent = weeklyOkCount;
+    document.getElementById('cardWeeklyOkSub').textContent = '/ ' + (summary.buy_signal_count != null ? summary.buy_signal_count : buySignals.length) + '銘柄中';
+    document.getElementById('cardFetch').textContent = (summary.fetch_success != null ? summary.fetch_success : raw.data.length) + ' / ' + (summary.fetch_total != null ? summary.fetch_total : 400);
+    document.getElementById('cardSignalDate').textContent = signalDate || raw.run_time || '-';
+
+    bar.className = 'panel status-bar ok';
+    bar.textContent = '✅ 読み込み完了（更新: ' + raw.run_time + '）';
+    render();
+  } catch (e) {
+    bar.className = 'panel status-bar err';
+    bar.textContent = '❌ ' + e.message + '（データソース名を確認してください）';
+  }
+}
+
+function render() {
+  const tbody = document.getElementById('resultTb');
+  if (ranking.length === 0) {
+    tbody.innerHTML = '';
+    document.getElementById('emptyMsg').style.display = 'block';
+    return;
+  }
+  document.getElementById('emptyMsg').style.display = 'none';
+
+  tbody.innerHTML = ranking.map(function (r, i) {
+    const wk = r.weekly_status === 'OK' ? '<span class="badge wk-ok">OK</span>'
+      : r.weekly_status === 'NG' ? '<span class="badge wk-ng">NG</span>'
+      : '<span class="badge wk-na">-</span>';
+    const mom = r.momentum_63d != null ? (r.momentum_63d >= 0 ? '+' : '') + r.momentum_63d.toFixed(2) + '%' : '-';
+    const chartUrl = 'https://www.tradingview.com/chart/?symbol=TSE%3A' + r.ticker;
+    return '<tr>' +
+      '<td>' + (i + 1) + '</td>' +
+      '<td><strong>' + r.ticker + '</strong></td>' +
+      '<td>' + (r.company_name || '-') + '</td>' +
+      '<td class="mom-pos">' + mom + '</td>' +
+      '<td>' + wk + '</td>' +
+      '<td>' + (r.latest_close != null ? '¥' + r.latest_close.toLocaleString() : '-') + '</td>' +
+      '<td>翌営業日始値で買い候補</td>' +
+      '<td><a class="chart-link" href="' + chartUrl + '" target="_blank">チャート &#8599;</a></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function downloadCsv() {
+  if (ranking.length === 0) return;
+  const header = ['signal_date', 'rank', 'code', 'name', 'momentum_63d', 'weekly_status', 'close', 'trade_timing'];
+  const rows = ranking.map(function (r, i) {
+    return [
+      signalDate || '', i + 1, r.ticker, r.company_name || '',
+      r.momentum_63d != null ? r.momentum_63d : '', r.weekly_status || '',
+      r.latest_close != null ? r.latest_close : '', '翌営業日始値で買い候補',
+    ].map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
+  });
+  const csv = '\uFEFF' + header.join(',') + '\n' + rows.join('\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'ema9_21_buy_signals_' + (signalDate || 'latest') + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+loadData();
+</script>
+</body>
+</html>
