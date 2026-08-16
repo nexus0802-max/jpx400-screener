@@ -544,7 +544,54 @@ def compute_rs_scores(records, bench_return):
 
 # ---------- 価格取得＋テクニカル＋ファンダ統合 ----------
 
-def fetch_and_analyze(ticker):
+# ---------- 新規：EMA9/21 BUY SIGNALS ----------
+
+def calc_ema(series, span):
+    return pd.Series(series).ewm(span=span, adjust=False).mean().values
+
+
+def detect_daily_buy_signal(opens, closes):
+    """日足BUY：EMA9がEMA21を当日上抜け(ゴールデンクロス) かつ 当日が陽線 かつ 終値がEMA9より上。"""
+    closes = np.asarray(closes, dtype=float)
+    opens = np.asarray(opens, dtype=float)
+    n = len(closes)
+    if n < 22:
+        return False
+    ema9 = calc_ema(closes, 9)
+    ema21 = calc_ema(closes, 21)
+    i = n - 1
+    golden_cross = ema9[i - 1] <= ema21[i - 1] and ema9[i] > ema21[i]
+    bullish = closes[i] > opens[i]
+    above_ema9 = closes[i] > ema9[i]
+    return bool(golden_cross and bullish and above_ema9)
+
+
+def detect_weekly_status(date_index, closes):
+    """週足OK/NG：日足終値を週足(金曜終値)にリサンプルし、週足EMA9がEMA21より上ならOK。
+    売買判定には使わない、参考表示専用。"""
+    try:
+        s = pd.Series(np.asarray(closes, dtype=float), index=pd.DatetimeIndex(date_index))
+        weekly = s.resample("W-FRI").last().dropna()
+        if len(weekly) < 22:
+            return None
+        w9 = calc_ema(weekly.values, 9)
+        w21 = calc_ema(weekly.values, 21)
+        return "OK" if w9[-1] > w21[-1] else "NG"
+    except Exception:
+        return None
+
+
+def calc_momentum_63d(closes):
+    closes = np.asarray(closes, dtype=float)
+    if len(closes) < 64:
+        return None
+    base = closes[-64]
+    if base == 0:
+        return None
+    return float(closes[-1] / base - 1) * 100
+
+
+
     try:
         t = f"{ticker}.T"
         df = yf.download(t, period="10y", progress=False, auto_adjust=True)
@@ -573,6 +620,12 @@ def fetch_and_analyze(ticker):
         weighted_return = calc_weighted_return(closes)
         vcp = analyze_vcp(closes, volumes)
         gap = analyze_gaps(opens, closes)
+
+        # EMA9/21 BUY SIGNALS用
+        daily_buy_signal = detect_daily_buy_signal(opens, closes)
+        weekly_status = detect_weekly_status(df.index, closes)
+        momentum_63d = calc_momentum_63d(closes)
+        signal_date = df.index[-1].strftime("%Y-%m-%d")
 
         # ==== trend.html用：ウォークフォワード検証（前半IS→後半OOS） ====
         split = N // 2
@@ -617,6 +670,10 @@ def fetch_and_analyze(ticker):
             "weighted_return": weighted_return,
             "extension_from_ma200_pct": extension_from_ma200_pct,
             "dist_from_52w_high_pct": dist_from_52w_high_pct,
+            "daily_buy_signal": daily_buy_signal,
+            "weekly_status": weekly_status,
+            "momentum_63d": round(momentum_63d, 2) if momentum_63d is not None else None,
+            "signal_date": signal_date,
             "closes": [round(float(c), 2) for c in closes],
             "volumes": [int(v) for v in volumes],
         }
@@ -902,6 +959,20 @@ def main():
         print(f"  -> IS : {rs_validation['in_sample']}")
         print(f"  -> OOS: {rs_validation['out_of_sample']}")
 
+    # ==== EMA9/21 BUY SIGNALS 用サマリー ====
+    buy_signals = [r for r in all_results if r.get("daily_buy_signal")]
+    weekly_ok_count = sum(1 for r in buy_signals if r.get("weekly_status") == "OK")
+    signal_dates = [r.get("signal_date") for r in all_results if r.get("signal_date")]
+    ema_signal_date = max(set(signal_dates), key=signal_dates.count) if signal_dates else None
+    ema_summary = {
+        "signal_date": ema_signal_date,
+        "buy_signal_count": len(buy_signals),
+        "weekly_ok_count": weekly_ok_count,
+        "fetch_success": len(all_results),
+        "fetch_total": total,
+    }
+    print(f"  -> EMA9/21 BUY: {len(buy_signals)}銘柄（うち週足OK {weekly_ok_count}銘柄）シグナル日={ema_signal_date}")
+
     run_time = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     output = {
         "run_time": run_time,
@@ -910,6 +981,7 @@ def main():
         "rs_basis": rs_basis,
         "market_regime": market_regime,
         "rs_momentum_validation": rs_validation,
+        "ema_signal_summary": ema_summary,
         "data": all_results,
     }
     output = sanitize_nan(output)
