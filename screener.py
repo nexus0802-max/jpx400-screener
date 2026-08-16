@@ -551,7 +551,7 @@ def calc_ema(series, span):
 
 
 def detect_daily_buy_signal(opens, closes):
-    """日足BUY：EMA9がEMA21を当日上抜け(ゴールデンクロス) かつ 当日が陽線 かつ 終値がEMA9より上。"""
+    """日足BUY：EMA9がEMA21より上にある状態(GC後の継続) かつ 当日が陽線 かつ 終値がEMA9より上。"""
     closes = np.asarray(closes, dtype=float)
     opens = np.asarray(opens, dtype=float)
     n = len(closes)
@@ -560,10 +560,10 @@ def detect_daily_buy_signal(opens, closes):
     ema9 = calc_ema(closes, 9)
     ema21 = calc_ema(closes, 21)
     i = n - 1
-    golden_cross = ema9[i - 1] <= ema21[i - 1] and ema9[i] > ema21[i]
+    in_gc_state = ema9[i] > ema21[i]
     bullish = closes[i] > opens[i]
     above_ema9 = closes[i] > ema9[i]
-    return bool(golden_cross and bullish and above_ema9)
+    return bool(in_gc_state and bullish and above_ema9)
 
 
 def detect_weekly_status(date_index, closes):
