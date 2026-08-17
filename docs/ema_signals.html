@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EMA9/21 BUY SIGNALS｜MARKET DESK</title>
+<title>EMA BUY SIGNALS｜MARKET DESK</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif;background:#f5f5f0;color:#1a1a1a;font-size:15px}
@@ -22,6 +22,11 @@ h1{font-size:21px;font-weight:600;margin-bottom:.6rem;display:flex;align-items:c
 .ok{background:#e8f5e0;color:#2d6a0a}
 .err{background:#fce8e8;color:#a32d2d}
 .loading{background:#f0f0f0;color:#666}
+.params{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-end;margin-bottom:1rem;padding-bottom:1rem;border-bottom:1px solid #f0f0f0}
+.param-group{display:flex;flex-direction:column;gap:4px}
+.param-label{font-size:11px;color:#888;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.param-group input{width:80px;font-size:14px;padding:5px 8px;border:1px solid #ddd;border-radius:6px}
+.param-note{font-size:11px;color:#aaa;max-width:260px;line-height:1.5}
 .toolbar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:1rem}
 .hint{font-size:12px;color:#999}
 button.action{font-size:13px;padding:8px 16px;border:1px solid #378ADD;border-radius:8px;background:#378ADD;color:#fff;cursor:pointer;font-weight:600}
@@ -47,10 +52,11 @@ tbody td{padding:9px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
 <div class="wrap">
 <a href="index.html" class="back-link">&larr; トップへ戻る</a>
 <div class="category">JPX400 / RANK 1 STRATEGY</div>
-<h1>⚡ EMA9/21 BUY SIGNALS</h1>
+<h1>⚡ EMA BUY SIGNALS</h1>
 <p class="desc">
-  その日に日足のBUYが確定した銘柄だけを、63日モメンタムの高い順に表示します。<br>
-  週足OK・NGは参考情報で、NGも除外しません。
+  上昇トレンド(EMA高速&gt;EMA低速)の中で、直近に押し目(安値がEMA高速まで下がる)を形成し、
+  当日陽線で反発した銘柄だけを、63日モメンタムの高い順に表示します。<br>
+  週足OK・NGは参考情報で、NGも除外しません。EMAの期間・押し目の判定日数は下のパラメータで調整できます。
 </p>
 
 <div id="statusBar" class="panel status-bar loading">⏳ データを読み込み中...</div>
@@ -78,6 +84,23 @@ tbody td{padding:9px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
 </div>
 
 <div class="panel">
+  <div class="params">
+    <div class="param-group">
+      <span class="param-label">EMA高速</span>
+      <input type="number" id="emaFast" value="9" min="2" max="50">
+    </div>
+    <div class="param-group">
+      <span class="param-label">EMA低速</span>
+      <input type="number" id="emaSlow" value="21" min="3" max="200">
+    </div>
+    <div class="param-group">
+      <span class="param-label">押し目判定日数</span>
+      <input type="number" id="pullbackDays" value="3" min="1" max="20">
+    </div>
+    <button class="action" onclick="recompute()">この条件で再計算</button>
+    <span class="param-note">EMA高速&gt;EMA低速の上昇トレンド中、直近N営業日以内(当日含む)に安値がEMA高速まで下がった日があり、当日陽線で終値がEMA高速より上に回復した銘柄を抽出します。</span>
+  </div>
+
   <div class="toolbar">
     <span class="hint">上位ほど直近約3か月の上昇率が高い銘柄です。同日に候補が多い場合の優先順位として使います。</span>
     <div style="display:flex;gap:8px">
@@ -102,7 +125,7 @@ tbody td{padding:9px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
   </div>
   <div id="emptyMsg" class="empty" style="display:none">
     <div style="font-size:36px;margin-bottom:.5rem">📭</div>
-    <p>本日、日足BUYが確定した銘柄はありません。</p>
+    <p>この条件で、日足BUYが確定した銘柄はありません。パラメータを緩めてみてください。</p>
   </div>
 
   <div class="datasrc">
@@ -115,8 +138,37 @@ tbody td{padding:9px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
 </div>
 
 <script>
+let rawData = null;
 let ranking = [];
 let signalDate = null;
+
+// pandas Series.ewm(span=span, adjust=False).mean() と同一の計算
+function calcEma(values, span) {
+  const alpha = 2 / (span + 1);
+  const out = new Array(values.length);
+  out[0] = values[0];
+  for (let i = 1; i < values.length; i++) {
+    out[i] = alpha * values[i] + (1 - alpha) * out[i - 1];
+  }
+  return out;
+}
+
+function detectDailyBuySignal(opens, closes, lows, emaFast, emaSlow, pullbackDays) {
+  const n = closes.length;
+  if (n < Math.max(emaFast, emaSlow) + 5) return { signal: false };
+  const emaF = calcEma(closes, emaFast);
+  const emaS = calcEma(closes, emaSlow);
+  const i = n - 1;
+  const inGcState = emaF[i] > emaS[i];
+  const bullish = closes[i] > opens[i];
+  const aboveFast = closes[i] > emaF[i];
+  const start = Math.max(0, i - pullbackDays + 1);
+  let pullbackOccurred = false;
+  for (let k = start; k <= i; k++) {
+    if (lows[k] <= emaF[k]) { pullbackOccurred = true; break; }
+  }
+  return { signal: !!(inGcState && bullish && aboveFast && pullbackOccurred) };
+}
 
 async function loadData() {
   const bar = document.getElementById('statusBar');
@@ -126,38 +178,50 @@ async function loadData() {
   try {
     const res = await fetch(src + '?t=' + Date.now());
     if (!res.ok) throw new Error('HTTP ' + res.status);
-    const raw = await res.json();
-    if (!raw.data || raw.data.length === 0) throw new Error('データが空です');
+    rawData = await res.json();
+    if (!rawData.data || rawData.data.length === 0) throw new Error('データが空です');
 
-    const summary = raw.ema_signal_summary || {};
-    signalDate = summary.signal_date || null;
-
-    // ① BUY判定 → ② BUY銘柄抽出 → ③ モメンタム計算(取得済み) → ④ ランキング
-    const buySignals = raw.data.filter(function (r) { return r.daily_buy_signal === true; });
-    ranking = buySignals.slice().sort(function (a, b) {
-      const av = a.momentum_63d == null ? -Infinity : a.momentum_63d;
-      const bv = b.momentum_63d == null ? -Infinity : b.momentum_63d;
-      if (bv !== av) return bv - av;
-      return String(a.ticker).localeCompare(String(b.ticker)); // 同率時のセカンダリソート
-    });
-
-    const weeklyOkCount = summary.weekly_ok_count != null
-      ? summary.weekly_ok_count
-      : buySignals.filter(function (r) { return r.weekly_status === 'OK'; }).length;
-
-    document.getElementById('cardBuyCount').textContent = (summary.buy_signal_count != null ? summary.buy_signal_count : buySignals.length);
-    document.getElementById('cardWeeklyOk').textContent = weeklyOkCount;
-    document.getElementById('cardWeeklyOkSub').textContent = '/ ' + (summary.buy_signal_count != null ? summary.buy_signal_count : buySignals.length) + '銘柄中';
-    document.getElementById('cardFetch').textContent = (summary.fetch_success != null ? summary.fetch_success : raw.data.length) + ' / ' + (summary.fetch_total != null ? summary.fetch_total : 400);
-    document.getElementById('cardSignalDate').textContent = signalDate || raw.run_time || '-';
+    const summary = rawData.ema_signal_summary || {};
+    signalDate = summary.signal_date || rawData.run_time || null;
+    document.getElementById('cardSignalDate').textContent = signalDate || '-';
+    document.getElementById('cardFetch').textContent =
+      (summary.fetch_success != null ? summary.fetch_success : rawData.data.length) + ' / ' + (summary.fetch_total != null ? summary.fetch_total : 400);
 
     bar.className = 'panel status-bar ok';
-    bar.textContent = '✅ 読み込み完了（更新: ' + raw.run_time + '）';
-    render();
+    bar.textContent = '✅ 読み込み完了（更新: ' + rawData.run_time + '）';
+    recompute();
   } catch (e) {
     bar.className = 'panel status-bar err';
-    bar.textContent = '❌ ' + e.message + '（データソース名を確認してください）';
+    bar.textContent = '❌ ' + e.message + '（データソース名を確認してください。opens/lowsが入っていない古いdata.jsonの可能性があります）';
   }
+}
+
+function recompute() {
+  if (!rawData) return;
+  const emaFast = parseInt(document.getElementById('emaFast').value, 10) || 9;
+  const emaSlow = parseInt(document.getElementById('emaSlow').value, 10) || 21;
+  const pullbackDays = parseInt(document.getElementById('pullbackDays').value, 10) || 3;
+
+  const buySignals = [];
+  for (const r of rawData.data) {
+    if (!r.opens || !r.closes || !r.lows) continue; // 古いdata.jsonにはopens/lowsが無い場合がある
+    const result = detectDailyBuySignal(r.opens, r.closes, r.lows, emaFast, emaSlow, pullbackDays);
+    if (result.signal) buySignals.push(r);
+  }
+
+  ranking = buySignals.slice().sort(function (a, b) {
+    const av = a.momentum_63d == null ? -Infinity : a.momentum_63d;
+    const bv = b.momentum_63d == null ? -Infinity : b.momentum_63d;
+    if (bv !== av) return bv - av;
+    return String(a.ticker).localeCompare(String(b.ticker));
+  });
+
+  const weeklyOkCount = ranking.filter(function (r) { return r.weekly_status === 'OK'; }).length;
+  document.getElementById('cardBuyCount').textContent = ranking.length;
+  document.getElementById('cardWeeklyOk').textContent = weeklyOkCount;
+  document.getElementById('cardWeeklyOkSub').textContent = '/ ' + ranking.length + '銘柄中';
+
+  render();
 }
 
 function render() {
@@ -190,12 +254,16 @@ function render() {
 
 function downloadCsv() {
   if (ranking.length === 0) return;
-  const header = ['signal_date', 'rank', 'code', 'name', 'momentum_63d', 'weekly_status', 'close', 'trade_timing'];
+  const emaFast = document.getElementById('emaFast').value;
+  const emaSlow = document.getElementById('emaSlow').value;
+  const pullbackDays = document.getElementById('pullbackDays').value;
+  const header = ['signal_date', 'rank', 'code', 'name', 'momentum_63d', 'weekly_status', 'close', 'trade_timing', 'ema_fast', 'ema_slow', 'pullback_days'];
   const rows = ranking.map(function (r, i) {
     return [
       signalDate || '', i + 1, r.ticker, r.company_name || '',
       r.momentum_63d != null ? r.momentum_63d : '', r.weekly_status || '',
       r.latest_close != null ? r.latest_close : '', '翌営業日始値で買い候補',
+      emaFast, emaSlow, pullbackDays,
     ].map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
   });
   const csv = '\uFEFF' + header.join(',') + '\n' + rows.join('\n');
@@ -203,7 +271,7 @@ function downloadCsv() {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'ema9_21_buy_signals_' + (signalDate || 'latest') + '.csv';
+  a.download = 'ema_buy_signals_' + (signalDate || 'latest') + '.csv';
   a.click();
   URL.revokeObjectURL(url);
 }
