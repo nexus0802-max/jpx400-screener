@@ -25,8 +25,8 @@ BENCHMARK_TICKER = "1306.T"
 
 # EMA9/21 BUY SIGNAL（detect_daily_buy_signal）で使うEMA期間のデフォルト値。
 # --daily-ema-fast / --daily-ema-slow のコマンドライン引数で変更できる。
-DEFAULT_DAILY_EMA_FAST = 9
-DEFAULT_DAILY_EMA_SLOW = 21
+DEFAULT_DAILY_EMA_FAST = 20
+DEFAULT_DAILY_EMA_SLOW = 30
 
 JPX400_TICKERS = [
     "1332","1414","1518","1605","1662","1719","1721","1801","1802","1803",
@@ -694,6 +694,7 @@ def fetch_and_analyze(ticker, ema_fast=DEFAULT_DAILY_EMA_FAST, ema_slow=DEFAULT_
             "signal_date": signal_date,
             "closes": [round(float(c), 2) for c in closes],
             "opens": [round(float(o), 2) for o in opens],
+            "highs": [round(float(h), 2) for h in highs],
             "lows": [round(float(l), 2) for l in lows],
             "volumes": [int(v) for v in volumes],
         }
