@@ -550,20 +550,25 @@ def calc_ema(series, span):
     return pd.Series(series).ewm(span=span, adjust=False).mean().values
 
 
-def detect_daily_buy_signal(opens, closes):
-    """日足BUY：EMA9がEMA21より上にある状態(GC後の継続) かつ 当日が陽線 かつ 終値がEMA9より上。"""
+def detect_daily_buy_signal(opens, closes, lows, ema_fast=9, ema_slow=21, pullback_days=3):
+    """日足BUY：EMA(fast)がEMA(slow)より上にある状態(GC後の継続) かつ
+    直近pullback_days営業日以内(当日含む)に安値がEMA(fast)まで下がった日がある(押し目形成) かつ
+    当日が陽線 かつ 終値がEMA(fast)より上(反発確認)。"""
     closes = np.asarray(closes, dtype=float)
     opens = np.asarray(opens, dtype=float)
+    lows = np.asarray(lows, dtype=float)
     n = len(closes)
-    if n < 22:
+    if n < max(ema_fast, ema_slow) + 5:
         return False
-    ema9 = calc_ema(closes, 9)
-    ema21 = calc_ema(closes, 21)
+    ema_f = calc_ema(closes, ema_fast)
+    ema_s = calc_ema(closes, ema_slow)
     i = n - 1
-    in_gc_state = ema9[i] > ema21[i]
+    in_gc_state = ema_f[i] > ema_s[i]
     bullish = closes[i] > opens[i]
-    above_ema9 = closes[i] > ema9[i]
-    return bool(in_gc_state and bullish and above_ema9)
+    above_fast = closes[i] > ema_f[i]
+    start = max(0, i - pullback_days + 1)
+    pullback_occurred = bool(np.any(lows[start:i + 1] <= ema_f[start:i + 1]))
+    return bool(in_gc_state and bullish and above_fast and pullback_occurred)
 
 
 def detect_weekly_status(date_index, closes):
@@ -622,7 +627,7 @@ def fetch_and_analyze(ticker):
         gap = analyze_gaps(opens, closes)
 
         # EMA9/21 BUY SIGNALS用
-        daily_buy_signal = detect_daily_buy_signal(opens, closes)
+        daily_buy_signal = detect_daily_buy_signal(opens, closes, lows)
         weekly_status = detect_weekly_status(df.index, closes)
         momentum_63d = calc_momentum_63d(closes)
         signal_date = df.index[-1].strftime("%Y-%m-%d")
@@ -675,6 +680,8 @@ def fetch_and_analyze(ticker):
             "momentum_63d": round(momentum_63d, 2) if momentum_63d is not None else None,
             "signal_date": signal_date,
             "closes": [round(float(c), 2) for c in closes],
+            "opens": [round(float(o), 2) for o in opens],
+            "lows": [round(float(l), 2) for l in lows],
             "volumes": [int(v) for v in volumes],
         }
         rec.update(fund)
