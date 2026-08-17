@@ -56,7 +56,7 @@ tbody td{padding:9px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
 <p class="desc">
   上昇トレンド(EMA高速&gt;EMA低速)の中で、直近に押し目(安値がEMA高速まで下がる)を形成し、
   当日陽線で反発した銘柄だけを、63日モメンタムの高い順に表示します。<br>
-  週足OK・NGは参考情報で、NGも除外しません。EMAの期間・押し目の判定日数は下のパラメータで調整できます。
+  週足OK・NGは参考情報で、NGも除外しません。EMAの期間は下のパラメータで調整できます（押し目判定日数は3営業日で固定）。
 </p>
 
 <div id="statusBar" class="panel status-bar loading">⏳ データを読み込み中...</div>
@@ -93,12 +93,8 @@ tbody td{padding:9px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
       <span class="param-label">EMA低速</span>
       <input type="number" id="emaSlow" value="21" min="3" max="200">
     </div>
-    <div class="param-group">
-      <span class="param-label">押し目判定日数</span>
-      <input type="number" id="pullbackDays" value="3" min="1" max="20">
-    </div>
     <button class="action" onclick="recompute()">この条件で再計算</button>
-    <span class="param-note">EMA高速&gt;EMA低速の上昇トレンド中、直近N営業日以内(当日含む)に安値がEMA高速まで下がった日があり、当日陽線で終値がEMA高速より上に回復した銘柄を抽出します。</span>
+    <span class="param-note">EMA高速&gt;EMA低速の上昇トレンド中、直近3営業日以内(当日含む)に安値がEMA高速まで下がった日があり、当日陽線で終値がEMA高速より上に回復した銘柄を抽出します。</span>
   </div>
 
   <div class="toolbar">
@@ -141,6 +137,7 @@ tbody td{padding:9px 10px;border-bottom:1px solid #f0f0f0;white-space:nowrap}
 let rawData = null;
 let ranking = [];
 let signalDate = null;
+const PULLBACK_DAYS = 3; // 押し目判定日数は固定（UIからは変更不可）
 
 // pandas Series.ewm(span=span, adjust=False).mean() と同一の計算
 function calcEma(values, span) {
@@ -200,12 +197,11 @@ function recompute() {
   if (!rawData) return;
   const emaFast = parseInt(document.getElementById('emaFast').value, 10) || 9;
   const emaSlow = parseInt(document.getElementById('emaSlow').value, 10) || 21;
-  const pullbackDays = parseInt(document.getElementById('pullbackDays').value, 10) || 3;
 
   const buySignals = [];
   for (const r of rawData.data) {
     if (!r.opens || !r.closes || !r.lows) continue; // 古いdata.jsonにはopens/lowsが無い場合がある
-    const result = detectDailyBuySignal(r.opens, r.closes, r.lows, emaFast, emaSlow, pullbackDays);
+    const result = detectDailyBuySignal(r.opens, r.closes, r.lows, emaFast, emaSlow, PULLBACK_DAYS);
     if (result.signal) buySignals.push(r);
   }
 
@@ -256,14 +252,13 @@ function downloadCsv() {
   if (ranking.length === 0) return;
   const emaFast = document.getElementById('emaFast').value;
   const emaSlow = document.getElementById('emaSlow').value;
-  const pullbackDays = document.getElementById('pullbackDays').value;
-  const header = ['signal_date', 'rank', 'code', 'name', 'momentum_63d', 'weekly_status', 'close', 'trade_timing', 'ema_fast', 'ema_slow', 'pullback_days'];
+  const header = ['signal_date', 'rank', 'code', 'name', 'momentum_63d', 'weekly_status', 'close', 'trade_timing', 'ema_fast', 'ema_slow'];
   const rows = ranking.map(function (r, i) {
     return [
       signalDate || '', i + 1, r.ticker, r.company_name || '',
       r.momentum_63d != null ? r.momentum_63d : '', r.weekly_status || '',
       r.latest_close != null ? r.latest_close : '', '翌営業日始値で買い候補',
-      emaFast, emaSlow, pullbackDays,
+      emaFast, emaSlow,
     ].map(function (v) { return '"' + String(v).replace(/"/g, '""') + '"'; }).join(',');
   });
   const csv = '\uFEFF' + header.join(',') + '\n' + rows.join('\n');
