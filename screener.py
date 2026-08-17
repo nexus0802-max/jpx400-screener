@@ -556,25 +556,32 @@ def calc_ema(series, span):
     return pd.Series(series).ewm(span=span, adjust=False).mean().values
 
 
-def detect_daily_buy_signal(opens, closes, lows, ema_fast=9, ema_slow=21, pullback_days=3):
-    """日足BUY：EMA(fast)がEMA(slow)より上にある状態(GC後の継続) かつ
-    直近pullback_days営業日以内(当日含む)に安値がEMA(fast)まで下がった日がある(押し目形成) かつ
-    当日が陽線 かつ 終値がEMA(fast)より上(反発確認)。"""
-    closes = np.asarray(closes, dtype=float)
+def detect_daily_buy_signal(opens, highs, lows, closes, ema_fast=9, ema_slow=21):
+    """日足BUY（Entry C、EMA戦略v2 Pineスクリプトのrawブザインアルと完全一致させる版）：
+    1) 前日終値が前日EMA(fast)より上（＝押し目がまだ入っていない状態）
+    2) 当日の安値がEMA(fast)以下、かつ当日の高値がEMA(slow)以上
+       （当日の値幅がfast/slowのゾーンにきちんと交差＝押し目形成）
+    3) 当日終値がEMA(slow)より上（ゾーンから上に戻ってきている）
+    4) 当日が陽線（close > open）かつ終値が前日高値を上抜け（反発確認）
+    """
     opens = np.asarray(opens, dtype=float)
+    highs = np.asarray(highs, dtype=float)
     lows = np.asarray(lows, dtype=float)
+    closes = np.asarray(closes, dtype=float)
     n = len(closes)
     if n < max(ema_fast, ema_slow) + 5:
         return False
     ema_f = calc_ema(closes, ema_fast)
     ema_s = calc_ema(closes, ema_slow)
     i = n - 1
-    in_gc_state = ema_f[i] > ema_s[i]
-    bullish = closes[i] > opens[i]
-    above_fast = closes[i] > ema_f[i]
-    start = max(0, i - pullback_days + 1)
-    pullback_occurred = bool(np.any(lows[start:i + 1] <= ema_f[start:i + 1]))
-    return bool(in_gc_state and bullish and above_fast and pullback_occurred)
+    pullback_into_zone = (
+        closes[i - 1] > ema_f[i - 1]
+        and lows[i] <= ema_f[i]
+        and highs[i] >= ema_s[i]
+        and closes[i] > ema_s[i]
+    )
+    bullish_reversal = closes[i] > opens[i] and closes[i] > highs[i - 1]
+    return bool(pullback_into_zone and bullish_reversal)
 
 
 def detect_weekly_status(date_index, closes):
@@ -633,7 +640,7 @@ def fetch_and_analyze(ticker, ema_fast=DEFAULT_DAILY_EMA_FAST, ema_slow=DEFAULT_
         gap = analyze_gaps(opens, closes)
 
         # EMA BUY SIGNALS用（ema_fast/ema_slowはfetch_and_analyzeの引数で変更可能）
-        daily_buy_signal = detect_daily_buy_signal(opens, closes, lows, ema_fast=ema_fast, ema_slow=ema_slow)
+        daily_buy_signal = detect_daily_buy_signal(opens, highs, lows, closes, ema_fast=ema_fast, ema_slow=ema_slow)
         weekly_status = detect_weekly_status(df.index, closes)
         momentum_63d = calc_momentum_63d(closes)
         signal_date = df.index[-1].strftime("%Y-%m-%d")
