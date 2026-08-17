@@ -15,12 +15,18 @@ import pandas as pd
 import numpy as np
 import json
 import math
+import argparse
 from datetime import datetime, timezone, timedelta
 import os
 
 # TOPIX連動ETF（"^TOPX"の指数シンボルはyfinanceでの取得安定性に懸念があるため、
 # 流動性が高く通常の株価と同じ経路で確実に取得できるETFをベンチマークの代理として使う）
 BENCHMARK_TICKER = "1306.T"
+
+# EMA9/21 BUY SIGNAL（detect_daily_buy_signal）で使うEMA期間のデフォルト値。
+# --daily-ema-fast / --daily-ema-slow のコマンドライン引数で変更できる。
+DEFAULT_DAILY_EMA_FAST = 9
+DEFAULT_DAILY_EMA_SLOW = 21
 
 JPX400_TICKERS = [
     "1332","1414","1518","1605","1662","1719","1721","1801","1802","1803",
@@ -596,7 +602,7 @@ def calc_momentum_63d(closes):
     return float(closes[-1] / base - 1) * 100
 
 
-def fetch_and_analyze(ticker):
+def fetch_and_analyze(ticker, ema_fast=DEFAULT_DAILY_EMA_FAST, ema_slow=DEFAULT_DAILY_EMA_SLOW):
     try:
         t = f"{ticker}.T"
         df = yf.download(t, period="10y", progress=False, auto_adjust=True)
@@ -626,8 +632,8 @@ def fetch_and_analyze(ticker):
         vcp = analyze_vcp(closes, volumes)
         gap = analyze_gaps(opens, closes)
 
-        # EMA9/21 BUY SIGNALS用
-        daily_buy_signal = detect_daily_buy_signal(opens, closes, lows)
+        # EMA BUY SIGNALS用（ema_fast/ema_slowはfetch_and_analyzeの引数で変更可能）
+        daily_buy_signal = detect_daily_buy_signal(opens, closes, lows, ema_fast=ema_fast, ema_slow=ema_slow)
         weekly_status = detect_weekly_status(df.index, closes)
         momentum_63d = calc_momentum_63d(closes)
         signal_date = df.index[-1].strftime("%Y-%m-%d")
@@ -921,9 +927,10 @@ def sanitize_nan(obj):
     return obj
 
 
-def main():
+def main(ema_fast=DEFAULT_DAILY_EMA_FAST, ema_slow=DEFAULT_DAILY_EMA_SLOW):
     JST = timezone(timedelta(hours=9))
     print(f"データ取得開始: {datetime.now(JST).strftime('%Y-%m-%d %H:%M:%S JST')}")
+    print(f"日足EMA BUY SIGNAL設定: EMA{ema_fast}/{ema_slow}")
     os.makedirs("docs", exist_ok=True)
     all_results = []
     total = len(JPX400_TICKERS)
@@ -941,7 +948,7 @@ def main():
 
     for i, ticker in enumerate(JPX400_TICKERS):
         print(f"[{i+1}/{total}] {ticker} 取得中...")
-        result = fetch_and_analyze(ticker)
+        result = fetch_and_analyze(ticker, ema_fast=ema_fast, ema_slow=ema_slow)
         if result:
             all_results.append(result)
             print(f"  -> OK RSI={result['rsi']} 終値={result['latest_close']} "
@@ -973,12 +980,14 @@ def main():
     ema_signal_date = max(set(signal_dates), key=signal_dates.count) if signal_dates else None
     ema_summary = {
         "signal_date": ema_signal_date,
+        "daily_ema_fast": ema_fast,
+        "daily_ema_slow": ema_slow,
         "buy_signal_count": len(buy_signals),
         "weekly_ok_count": weekly_ok_count,
         "fetch_success": len(all_results),
         "fetch_total": total,
     }
-    print(f"  -> EMA9/21 BUY: {len(buy_signals)}銘柄（うち週足OK {weekly_ok_count}銘柄）シグナル日={ema_signal_date}")
+    print(f"  -> EMA{ema_fast}/{ema_slow} BUY: {len(buy_signals)}銘柄（うち週足OK {weekly_ok_count}銘柄）シグナル日={ema_signal_date}")
 
     run_time = datetime.now(JST).strftime("%Y-%m-%d %H:%M JST")
     output = {
@@ -997,5 +1006,15 @@ def main():
 
     print(f"\n完了: {len(all_results)}銘柄 -> docs/data.json")
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="サテライト銘柄スクリーナー（EMA BUY SIGNALのEMA期間は変更可能）")
+    parser.add_argument("--daily-ema-fast", type=int, default=DEFAULT_DAILY_EMA_FAST,
+                         help=f"日足BUYシグナルの速いEMA期間（デフォルト{DEFAULT_DAILY_EMA_FAST}）")
+    parser.add_argument("--daily-ema-slow", type=int, default=DEFAULT_DAILY_EMA_SLOW,
+                         help=f"日足BUYシグナルの遅いEMA期間（デフォルト{DEFAULT_DAILY_EMA_SLOW}）")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(ema_fast=args.daily_ema_fast, ema_slow=args.daily_ema_slow)
