@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>日経平均 週足サイクルメーター</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700;900&family=Share+Tech+Mono&display=swap');
+
+  :root {
+    --bg: #080810;
+    --surface: #0f0f1a;
+    --surface2: #13131f;
+    --border: #1c1c2e;
+    --gold: #d4a843;
+    --green: #00e096;
+    --red: #ff3d5a;
+    --orange: #ff9f43;
+    --purple: #b08fff;
+    --blue: #4fc3f7;
+    --text: #f0f0fa;
+    --muted: #707090;
+    --dim: #353555;
+    --mono: 'Share Tech Mono', monospace;
+    --sans: 'Noto Sans JP', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 16px 64px;
+  }
+
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background:
+      radial-gradient(ellipse 60% 40% at 15% 10%, rgba(212,168,67,0.05) 0%, transparent 70%),
+      radial-gradient(ellipse 50% 50% at 85% 85%, rgba(176,143,255,0.04) 0%, transparent 70%);
+    pointer-events: none;
+  }
+
+  .wrap { width: 100%; max-width: 740px; }
+
+  /* HEADER */
+  .hdr { text-align: center; margin-bottom: 36px; }
+  .hdr-eyebrow {
+    font-family: var(--mono); font-size: 12px;
+    letter-spacing: 5px; color: var(--gold);
+    text-transform: uppercase; margin-bottom: 10px;
+  }
+  .hdr-title { font-size: 28px; font-weight: 900; letter-spacing: 3px; margin-bottom: 8px; }
+  .hdr-date  { font-family: var(--mono); font-size: 14px; color: var(--muted); }
+
+  /* CARD */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 28px 32px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .card-label {
+    font-family: var(--mono); font-size: 12px;
+    letter-spacing: 4px; color: var(--muted);
+    text-transform: uppercase; margin-bottom: 20px;
+  }
+
+  /* VERDICT */
+  .verdict::after {
+    content: ''; position: absolute;
+    top: 0; left: 0; right: 0; height: 3px;
+    background: var(--vc, var(--gold));
+  }
+  .v-phase {
+    font-family: var(--mono); font-size: 12px;
+    letter-spacing: 4px; color: var(--muted);
+    text-transform: uppercase; margin-bottom: 12px;
+  }
+  .v-main  { font-size: 34px; font-weight: 900; line-height: 1.2; margin-bottom: 14px; }
+  .v-desc  { font-size: 16px; color: #9898b8; line-height: 1.9; white-space: pre-line; }
+
+  /* GAUGE */
+  .gauge-track {
+    width: 100%; height: 12px;
+    background: var(--border); border-radius: 3px;
+    position: relative; overflow: visible; margin-bottom: 16px;
+  }
+  .gauge-fill   { height: 100%; border-radius: 3px; transition: width 1.2s cubic-bezier(.4,0,.2,1); }
+  .gauge-dot {
+    position: absolute; top: 50%;
+    width: 20px; height: 20px; border-radius: 50%;
+    background: #fff; border: 3px solid var(--gc, #fff);
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 14px var(--gc, #fff);
+    transition: left 1.2s cubic-bezier(.4,0,.2,1);
+  }
+  .gauge-labels { display: flex; justify-content: space-between; }
+  .gl { font-family: var(--mono); font-size: 12px; color: var(--dim); letter-spacing: 1px; }
+
+  /* STATS */
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 16px; }
+  .sc {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 4px; padding: 24px 26px;
+  }
+  .sc-label {
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 2px; color: var(--muted);
+    text-transform: uppercase; margin-bottom: 10px;
+  }
+  .sc-val  { font-family: var(--mono); font-size: 30px; font-weight: 700; color: var(--gold); line-height: 1; margin-bottom: 8px; }
+  .sc-sub  { font-size: 14px; color: var(--muted); line-height: 1.6; }
+  .sc-val.red    { color: var(--red); }
+  .sc-val.orange { color: var(--orange); }
+  .sc-val.green  { color: var(--green); }
+
+  /* MERCURY */
+  .mercury-intro { font-size: 15px; color: #8080a8; line-height: 1.8; margin-bottom: 22px; }
+  .merc-list { display: flex; flex-direction: column; gap: 10px; }
+  .merc-item {
+    display: flex; align-items: center; gap: 16px;
+    padding: 16px 20px;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 3px;
+  }
+  .merc-item.mi-active  { border-color: var(--purple); background: rgba(176,143,255,0.07); }
+  .merc-item.mi-past    { opacity: 0.4; }
+  .merc-item.mi-soon    { border-color: rgba(212,168,67,0.4); }
+  .merc-icon { font-size: 24px; flex-shrink: 0; width: 34px; text-align: center; }
+  .mi-active .merc-icon { animation: spin 6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .merc-body    { flex: 1; min-width: 0; }
+  .merc-period  { font-family: var(--mono); font-size: 15px; color: var(--text); margin-bottom: 4px; }
+  .merc-note    { font-size: 14px; color: var(--muted); }
+  .mbadge {
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 2px; padding: 5px 12px;
+    border-radius: 2px; text-transform: uppercase; flex-shrink: 0;
+  }
+  .mb-active { background: rgba(176,143,255,0.18); color: var(--purple); border: 1px solid var(--purple); }
+  .mb-past   { background: rgba(53,53,85,0.4);    color: var(--dim);    border: 1px solid var(--dim); }
+  .mb-soon   { background: rgba(212,168,67,0.14); color: var(--gold);   border: 1px solid rgba(212,168,67,0.4); }
+  .mb-future { background: rgba(28,28,46,0.6);    color: var(--dim);    border: 1px solid var(--dim); }
+
+  /* HISTORY TABLE */
+  .htable { width: 100%; border-collapse: collapse; }
+  .htable th {
+    font-family: var(--mono); font-size: 11px;
+    letter-spacing: 2px; color: var(--dim);
+    text-transform: uppercase; text-align: left;
+    padding-bottom: 14px; border-bottom: 1px solid var(--border);
+  }
+  .htable td {
+    font-family: var(--mono); font-size: 14px; color: var(--muted);
+    padding: 13px 0; border-bottom: 1px solid rgba(28,28,46,0.5);
+    vertical-align: middle;
+  }
+  .htable tr.cur td { color: var(--gold); }
+  .pip {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 10px; vertical-align: middle;
+    background: var(--dim);
+  }
+  .pip.top  { background: var(--red); }
+  .pip.bot  { background: var(--green); }
+  .pip.now  { background: var(--gold); animation: glow 2s ease-in-out infinite; }
+  @keyframes glow {
+    0%,100% { box-shadow: 0 0 4px var(--gold); }
+    50%      { box-shadow: 0 0 10px var(--gold); opacity:.7; }
+  }
+  .tag-top { color: var(--red);   font-size: 11px; }
+  .tag-bot { color: var(--green); font-size: 11px; }
+
+  /* SCENARIOS */
+  .srow { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-top: 18px; }
+  .sitem {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 18px 16px;
+  }
+  .sitem-tag   { font-family: var(--mono); font-size: 10px; letter-spacing: 2px; color: var(--dim); text-transform: uppercase; margin-bottom: 8px; }
+  .sitem-title { font-size: 17px; font-weight: 700; margin-bottom: 10px; }
+  .sitem-price { font-family: var(--mono); font-size: 14px; color: var(--text); margin-bottom: 6px; }
+  .sitem-when  { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+  /* FOOTER */
+  .footer {
+    text-align: center; font-family: var(--mono); font-size: 11px;
+    color: var(--dim); margin-top: 10px; line-height: 2; letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="hdr">
+    <div class="hdr-eyebrow">Peak-to-Trough Cycle · Mercury Retrograde</div>
+    <div class="hdr-title">日経平均 週足サイクルメーター</div>
+    <div class="hdr-date" id="hdDate">--</div>
+  </div>
+
+  <div class="card verdict" id="verdictBox">
+    <div class="v-phase" id="vPhase">--</div>
+    <div class="v-main"  id="vMain">--</div>
+    <div class="v-desc"  id="vDesc">--</div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Cycle Progress — 天井からの経過（底まで）</div>
+    <div class="gauge-track">
+      <div class="gauge-fill" id="gFill"></div>
+      <div class="gauge-dot"  id="gDot"></div>
+    </div>
+    <div class="gauge-labels">
+      <span class="gl">天井直後</span>
+      <span class="gl">下落中</span>
+      <span class="gl">底圏接近</span>
+      <span class="gl">底打ち候補</span>
+      <span class="gl">底確認</span>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="sc">
+      <div class="sc-label">直近天井（サイクル起点）</div>
+      <div class="sc-val red" id="stTopDate">--</div>
+      <div class="sc-sub" id="stTopPrice">--</div>
+    </div>
+    <div class="sc">
+      <div class="sc-label">天井からの経過週数</div>
+      <div class="sc-val" id="stWeeks">--</div>
+      <div class="sc-sub">週経過　過去平均：16〜24週で底打ち</div>
+    </div>
+    <div class="sc">
+      <div class="sc-label">天井からの下落率</div>
+      <div class="sc-val orange" id="stDrop">--</div>
+      <div class="sc-sub" id="stDropDetail">天井比</div>
+    </div>
+    <div class="sc">
+      <div class="sc-label">底打ち判断</div>
+      <div class="sc-val" id="stJudge" style="font-size:20px">--</div>
+      <div class="sc-sub" id="stJudgeDesc">--</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">☿ Mercury Retrograde — 水星逆行（直近3回）</div>
+    <div class="mercury-intro">
+      水星逆行期間は通信・契約・判断力に乱れが生じやすいとされ、相場でも急変・反転のトリガーになることがある。天井・底のタイミングと重なるケースも多く、判断の補助材料として参照。
+    </div>
+    <div class="merc-list" id="mercList"></div>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Peak → Trough History — 天井→底サイクルの記録</div>
+    <table class="htable">
+      <thead>
+        <tr>
+          <th>種別</th>
+          <th>日付</th>
+          <th>価格</th>
+          <th>備考</th>
+        </tr>
+      </thead>
+      <tbody id="histBody"></tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-label">Next Trough — 底のシナリオ</div>
+    <div class="srow" id="sRow"></div>
+  </div>
+
+  <div class="footer">
+    ※ 週足サイクル・水星逆行はあくまで参考情報です。売買は自己責任で。<br>
+    Peak-to-trough avg 16–24W · 3-Year major cycle risk 2026 · Mercury dates verified
+  </div>
+</div>
+
+<script>
+// ─── データ：天井→底のペア ───────────────────────
+// 過去の主要天井→底
+const CYCLE_HISTORY = [
+  { type:'top', date:'2021-09-14', price:30670,  label:'2021年秋 天井' },
+  { type:'bot', date:'2022-03-07', price:24681,  label:'利上げ懸念 底', weeks:25 },
+  { type:'top', date:'2023-06-19', price:33772,  label:'2023年夏 天井' },
+  { type:'bot', date:'2023-10-04', price:30487,  label:'秋 底',          weeks:15 },
+  { type:'top', date:'2024-03-22', price:40888,  label:'2024年3月 天井' },
+  { type:'bot', date:'2024-08-05', price:31156,  label:'円キャリー 底',  weeks:20 },
+  { type:'top', date:'2024-07-11', price:42426,  label:'2024年7月 天井' },
+  { type:'bot', date:'2024-08-05', price:31156,  label:'円キャリー 底',  weeks: 4 },
+  { type:'top', date:'2025-12-25', price:40281,  label:'2025年末 天井（概算）' },
+  { type:'bot', date:'2025-04-07', price:30792,  label:'関税ショック 底', weeks:15 },
+  // 現在進行中
+  { type:'top', date:'2026-02-26', price:59332,  label:'2026年2月 直近天井 ★', current:true },
+];
+
+// 現在進行中サイクルの起点
+const CURRENT_TOP  = { date:'2026-02-26', price:59332 };
+// 現在値（直近確認値）
+const CURRENT_PRICE = 53500;
+// 過去の天井→底 平均週数
+const AVG_PEAK_TO_TROUGH_MIN = 16;
+const AVG_PEAK_TO_TROUGH_MAX = 24;
+
+// 水星逆行（直近3回 - 確認済み日付）
+const MERCURY = [
+  { start:'2025-11-10', end:'2025-11-30', note:'射手座→蠍座。2025年最後の逆行' },
+  { start:'2026-02-26', end:'2026-03-21', note:'魚座。日経年初高値（59,332円）と完全一致 ⚠ 天井形成と重複' },
+  { start:'2026-06-30', end:'2026-07-24', note:'蟹座。次の底候補期間と重複の可能性 ⚠' },
+];
+
+const NOW = new Date();
+
+function pd(s){ return new Date(s+'T00:00:00'); }
+function wks(a,b){ return Math.floor((b-a)/(7*24*3600*1000)); }
+function fmtM(s){ const d=pd(s); return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`; }
+function fmtD(s){ const d=pd(s); return `${d.getFullYear()}/${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}`; }
+function fmtP(p){ return p.toLocaleString()+'円'; }
+
+function analyze(){
+  const topDate  = pd(CURRENT_TOP.date);
+  const elapsed  = wks(topDate, NOW);
+  const dropPct  = ((CURRENT_TOP.price - CURRENT_PRICE) / CURRENT_TOP.price * 100).toFixed(1);
+
+  // ゲージ：最大40週を100%として表示
+  const MAX = 40;
+  const pct = Math.min(elapsed / MAX * 100, 99);
+
+  let phase, main, desc, vc, gc, judge, judgeDesc;
+
+  if(elapsed <= 4){
+    phase='EARLY DECLINE'; main='下落初期　様子見';
+    desc=`天井から${elapsed}週。まだ調整初期。\n底打ちには早い。週足の下落継続を確認する局面。`;
+    vc=gc='var(--orange)';
+    judge='様子見'; judgeDesc='底打ちには早すぎる';
+  } else if(elapsed <= AVG_PEAK_TO_TROUGH_MIN){
+    phase='DECLINING'; main='下落継続中　待機';
+    desc=`天井から${elapsed}週。過去平均では底打ちまで16〜24週。\nまだ底圏に入っていない可能性が高い。焦らず待機。`;
+    vc=gc='var(--red)';
+    judge='待機中'; judgeDesc=`底まであと${AVG_PEAK_TO_TROUGH_MIN - elapsed}週以上か`;
+  } else if(elapsed <= AVG_PEAK_TO_TROUGH_MAX){
+    phase='TROUGH ZONE'; main='底圏に接近　アンテナを張る';
+    desc=`天井から${elapsed}週。過去平均の底打ちレンジ（16〜24週）に入った。\n週足で陽線の連続・出来高増加などの底打ちシグナルを確認したい局面。`;
+    vc=gc='var(--gold)';
+    judge='底圏接近 ⚠'; judgeDesc='シグナル待ちの局面';
+  } else if(elapsed <= AVG_PEAK_TO_TROUGH_MAX + 8){
+    phase='EXTENDED DECLINE'; main='平均を超えた　底打ちが近い可能性';
+    desc=`天井から${elapsed}週。過去平均（16〜24週）を超えた。\n深い調整か、または底打ちが非常に近い可能性。週足の反転シグナルに注目。`;
+    vc=gc='var(--green)';
+    judge='底打ち近い可能性'; judgeDesc='反転シグナルを確認次第';
+  } else {
+    phase='LATE TROUGH — BUY ZONE'; main='底打ち確認段階　仕込み準備';
+    desc=`天井から${elapsed}週。深い調整が長期化している。\n底打ちシグナルが出れば積極的な仕込みを検討できる局面。`;
+    vc=gc='var(--green)';
+    judge='仕込み準備'; judgeDesc='底打ち確認で行動';
+  }
+
+  return { elapsed, dropPct, pct, phase, main, desc, vc, gc, judge, judgeDesc };
+}
+
+function mercStatus(m){
+  const s=pd(m.start), e=pd(m.end);
+  const soon=new Date(s); soon.setDate(soon.getDate()-30);
+  if(NOW>=s && NOW<=e) return 'active';
+  if(NOW<s  && NOW>=soon) return 'soon';
+  if(NOW>e)  return 'past';
+  return 'future';
+}
+
+function render(){
+  const r = analyze();
+
+  document.getElementById('hdDate').textContent =
+    `${NOW.getFullYear()}年${NOW.getMonth()+1}月${NOW.getDate()}日 現在`;
+
+  // Verdict
+  const vb = document.getElementById('verdictBox');
+  vb.style.setProperty('--vc', r.vc);
+  document.getElementById('vPhase').textContent = r.phase;
+  const vm = document.getElementById('vMain');
+  vm.textContent = r.main; vm.style.color = r.vc;
+  document.getElementById('vDesc').textContent = r.desc;
+
+  // Gauge
+  const pct = Math.min(r.pct, 98);
+  const gf  = document.getElementById('gFill');
+  const gd  = document.getElementById('gDot');
+  gf.style.width      = pct + '%';
+  gf.style.background = `linear-gradient(90deg, var(--red), ${r.gc})`;
+  gd.style.left       = pct + '%';
+  gd.style.setProperty('--gc', r.gc);
+
+  // Stats
+  document.getElementById('stTopDate').textContent   = fmtM(CURRENT_TOP.date);
+  document.getElementById('stTopPrice').textContent  = fmtP(CURRENT_TOP.price);
+  document.getElementById('stWeeks').textContent     = r.elapsed + '週';
+  document.getElementById('stDrop').textContent      = '▼' + r.dropPct + '%';
+  document.getElementById('stDropDetail').textContent= `${fmtP(CURRENT_TOP.price)} → 現在 ${fmtP(CURRENT_PRICE)}（概算）`;
+  document.getElementById('stJudge').textContent     = r.judge;
+  document.getElementById('stJudge').style.color     = r.vc;
+  document.getElementById('stJudgeDesc').textContent = r.judgeDesc;
+
+  // Mercury（直近3件のみ）
+  const ml = document.getElementById('mercList');
+  ml.innerHTML = '';
+  MERCURY.forEach(m => {
+    const st  = mercStatus(m);
+    const cls = st==='active'?'mi-active': st==='past'?'mi-past': st==='soon'?'mi-soon':'';
+    const badge =
+      st==='active' ? '<span class="mbadge mb-active">逆行中</span>' :
+      st==='soon'   ? '<span class="mbadge mb-soon">まもなく</span>' :
+      st==='past'   ? '<span class="mbadge mb-past">終了</span>'     :
+                      '<span class="mbadge mb-future">予定</span>';
+    const div = document.createElement('div');
+    div.className = `merc-item ${cls}`;
+    div.innerHTML = `
+      <div class="merc-icon">☿</div>
+      <div class="merc-body">
+        <div class="merc-period">${fmtD(m.start)} 〜 ${fmtD(m.end)}</div>
+        <div class="merc-note">${m.note}</div>
+      </div>
+      ${badge}
+    `;
+    ml.appendChild(div);
+  });
+
+  // History Table（天井→底ペアを表示）
+  const tb = document.getElementById('histBody');
+  tb.innerHTML = '';
+  CYCLE_HISTORY.forEach(c => {
+    const isCur = !!c.current;
+    const tr = document.createElement('tr');
+    if(isCur) tr.className = 'cur';
+    const typeLabel = c.type==='top'
+      ? '<span class="tag-top">▲ 天井</span>'
+      : '<span class="tag-bot">▼ 底</span>';
+    const pipCls = c.type==='top' ? 'top' : (isCur ? 'now' : 'bot');
+    const weeksCol = c.weeks ? `${c.weeks}週で底打ち` : (isCur ? `${r.elapsed}週（継続中）` : '');
+    tr.innerHTML = `
+      <td><span class="pip ${pipCls}"></span>${typeLabel}</td>
+      <td>${fmtM(c.date)}</td>
+      <td>${fmtP(c.price)}</td>
+      <td>${weeksCol}</td>
+    `;
+    tb.appendChild(tr);
+  });
+
+  // Scenarios
+  const sr = document.getElementById('sRow');
+  sr.innerHTML = '';
+  [
+    { tag:'Shallow',  title:'浅い調整', color:'var(--orange)', price:'50,000〜52,000円台', when:'2026年夏頃（16〜20週）' },
+    { tag:'Standard', title:'標準調整', color:'var(--gold)',   price:'45,000〜48,000円台', when:'2026年秋（20〜28週）' },
+    { tag:'Deep·3Y',  title:'深い調整', color:'var(--red)',    price:'38,000〜42,000円台', when:'2026年末〜2027年' },
+  ].forEach(s => {
+    const d = document.createElement('div');
+    d.className = 'sitem';
+    d.innerHTML = `
+      <div class="sitem-tag">${s.tag}</div>
+      <div class="sitem-title" style="color:${s.color}">${s.title}</div>
+      <div class="sitem-price">${s.price}</div>
+      <div class="sitem-when">${s.when}</div>
+    `;
+    sr.appendChild(d);
+  });
+}
+
+render();
+</script>
+</body>
+</html>

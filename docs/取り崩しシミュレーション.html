@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>資産取り崩しシミュレーター</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #060a14 0%, #0d1529 50%, #060a14 100%);
+    font-family: 'Noto Sans JP', sans-serif;
+    color: #e2e8f0;
+    padding: 32px 20px;
+  }
+
+  /* Header */
+  .header { text-align: center; margin-bottom: 40px; }
+  .header-sub { color: #d4af37; font-size: 13px; letter-spacing: 0.3em; margin-bottom: 8px; opacity: 0.7; }
+  .header h1 { font-family: 'Playfair Display', serif; font-size: clamp(22px, 4vw, 34px); font-weight: 400; color: #fff; letter-spacing: 0.05em; }
+  .header h1 span { color: #d4af37; }
+
+  /* Layout */
+  .layout {
+    max-width: 1100px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: clamp(280px, 30%, 360px) 1fr;
+    gap: 24px;
+    align-items: start;
+  }
+
+  /* Panels */
+  .panel {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 20px;
+    padding: 28px;
+    backdrop-filter: blur(10px);
+  }
+
+  /* Principal Input */
+  .section-label { color: #a0aec0; font-size: 16px; letter-spacing: 0.05em; margin-bottom: 10px; }
+  .principal-row { display: flex; gap: 8px; align-items: center; }
+  .principal-input {
+    flex: 1; min-width: 0;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(212,175,55,0.3);
+    border-radius: 10px;
+    color: #d4af37;
+    font-size: 26px;
+    font-family: monospace;
+    font-weight: 700;
+    padding: 10px 14px;
+    outline: none;
+    width: 100%;
+  }
+  .unit-select {
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px;
+    color: #e2e8f0;
+    font-size: 16px;
+    padding: 10px;
+    outline: none;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .principal-sub { color: #718096; font-size: 14px; margin-top: 6px; }
+
+  /* Rate Inputs */
+  .divider { border-top: 1px solid rgba(255,255,255,0.06); padding-top: 24px; margin-top: 4px; }
+  .rate-block { margin-bottom: 24px; }
+  .rate-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 10px; }
+  .rate-label { color: #a0aec0; font-size: 16px; letter-spacing: 0.05em; }
+  .rate-value-row { display: flex; align-items: baseline; gap: 4px; }
+  .rate-number-input {
+    width: 72px;
+    background: rgba(255,255,255,0.06);
+    border-radius: 8px;
+    font-size: 24px;
+    font-family: monospace;
+    font-weight: 700;
+    padding: 4px 8px;
+    outline: none;
+    text-align: right;
+  }
+  .rate-unit { font-size: 24px; font-family: monospace; font-weight: 700; }
+
+  /* Sliders */
+  input[type=range] {
+    width: 100%; height: 4px;
+    -webkit-appearance: none; appearance: none;
+    border-radius: 2px; outline: none; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background: #d4af37;
+    cursor: pointer;
+    box-shadow: 0 0 0 3px rgba(212,175,55,0.2);
+    transition: box-shadow 0.2s;
+  }
+  input[type=range]::-webkit-slider-thumb:hover { box-shadow: 0 0 0 6px rgba(212,175,55,0.3); }
+
+  /* Summary Cards */
+  .summary-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+  .card {
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .card-label { font-size: 13px; margin-bottom: 4px; }
+  .card-value { font-size: 17px; font-family: monospace; font-weight: 600; color: #fff; }
+
+  /* Status Badge */
+  .status-badge {
+    margin-top: 16px; padding: 14px;
+    border-radius: 12px; text-align: center;
+  }
+  .status-icon { font-size: 26px; margin-bottom: 4px; }
+  .status-text { font-weight: 600; font-size: 15px; }
+
+  /* Chart Panel */
+  .chart-header { margin-bottom: 20px; }
+  .chart-header-sub { color: #a0aec0; font-size: 14px; letter-spacing: 0.1em; margin-bottom: 4px; }
+  .chart-header-title { color: #fff; font-size: 22px; font-weight: 500; }
+  .chart-wrap { position: relative; height: 320px; }
+
+  /* Milestones */
+  .milestones { margin-top: 24px; }
+  .milestones-label { color: #718096; font-size: 13px; letter-spacing: 0.15em; margin-bottom: 12px; }
+  .milestone-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+  .milestone-card { border-radius: 10px; padding: 12px; }
+  .milestone-year { color: #718096; font-size: 13px; margin-bottom: 4px; }
+  .milestone-amount { font-size: 16px; font-family: monospace; font-weight: 600; }
+  .milestone-pct { font-size: 12px; margin-top: 2px; }
+
+  /* Monthly Income */
+  .monthly-box {
+    margin-top: 20px; padding: 16px;
+    background: rgba(212,175,55,0.05);
+    border: 1px solid rgba(212,175,55,0.15);
+    border-radius: 12px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .monthly-icon { font-size: 28px; flex-shrink: 0; }
+  .monthly-label { color: #a0aec0; font-size: 14px; }
+  .monthly-amount { color: #d4af37; font-size: 28px; font-family: monospace; font-weight: 700; }
+  .monthly-note { color: #718096; font-size: 13px; margin-top: 2px; }
+
+  /* Number input spinner hide */
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; }
+  input[type=number] { -moz-appearance: textfield; }
+
+  /* Responsive */
+  @media (max-width: 700px) {
+    .layout { grid-template-columns: 1fr; }
+    body { padding: 20px 12px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-sub">FINANCIAL PLANNING TOOL</div>
+  <h1>資産取り崩し<span>シミュレーター</span></h1>
+</div>
+
+<div class="layout">
+  <!-- Left Panel -->
+  <div class="panel">
+    <div style="margin-bottom:28px">
+      <div class="section-label">初期資産額</div>
+      <div class="principal-row">
+        <input class="principal-input" type="number" id="principalInput" value="3000">
+        <select class="unit-select" id="unitSelect">
+          <option value="man">万円</option>
+          <option value="oku">億円</option>
+          <option value="en">円</option>
+        </select>
+      </div>
+      <div class="principal-sub" id="principalSub">= 3,000万円</div>
+    </div>
+
+    <div class="divider">
+      <!-- 年間運用利回り -->
+      <div class="rate-block">
+        <div class="rate-header">
+          <span class="rate-label">年間運用利回り</span>
+          <div class="rate-value-row">
+            <input class="rate-number-input" type="number" id="returnNumInput" value="6" min="0" max="15" step="0.1"
+              style="border:1px solid #68d39155; color:#68d391;">
+            <span class="rate-unit" style="color:#68d391;">%</span>
+          </div>
+        </div>
+        <input type="range" id="returnSlider" min="0" max="15" step="0.1" value="6"
+          style="background: linear-gradient(to right, #68d391 40%, rgba(255,255,255,0.1) 0%);">
+      </div>
+
+      <!-- 年間取り崩し率 -->
+      <div class="rate-block">
+        <div class="rate-header">
+          <span class="rate-label">年間取り崩し率</span>
+          <div class="rate-value-row">
+            <input class="rate-number-input" type="number" id="drawdownNumInput" value="4" min="0.1" max="20" step="0.1"
+              style="border:1px solid #fc818155; color:#fc8181;">
+            <span class="rate-unit" style="color:#fc8181;">%</span>
+          </div>
+        </div>
+        <input type="range" id="drawdownSlider" min="0.1" max="20" step="0.1" value="4"
+          style="background: linear-gradient(to right, #fc8181 19.4%, rgba(255,255,255,0.1) 0%);">
+      </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="summary-cards">
+      <div class="card" style="background:rgba(104,211,145,0.08); border:1px solid rgba(104,211,145,0.2);">
+        <div class="card-label" style="color:#68d391;">年間取り崩し額</div>
+        <div class="card-value" id="annualDrawCard">120万円</div>
+      </div>
+      <div class="card" style="background:rgba(212,175,55,0.08); border:1px solid rgba(212,175,55,0.2);">
+        <div class="card-label" style="color:#d4af37;">月額収入</div>
+        <div class="card-value" id="monthlyCard">10万円</div>
+      </div>
+    </div>
+
+    <!-- Status -->
+    <div class="status-badge" id="statusBadge">
+      <div class="status-icon" id="statusIcon">🌱</div>
+      <div class="status-text" id="statusText">計算中...</div>
+    </div>
+  </div>
+
+  <!-- Right Panel -->
+  <div class="panel">
+    <div class="chart-header">
+      <div class="chart-header-sub">ASSET PROJECTION</div>
+      <div class="chart-header-title">資産残高の推移（50年間）</div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="myChart"></canvas>
+    </div>
+
+    <!-- Milestones -->
+    <div class="milestones">
+      <div class="milestones-label">MILESTONES</div>
+      <div class="milestone-grid" id="milestoneGrid"></div>
+    </div>
+
+    <!-- Monthly Income -->
+    <div class="monthly-box">
+      <div class="monthly-icon">💰</div>
+      <div>
+        <div class="monthly-label">毎月の取り崩し額（想定）</div>
+        <div class="monthly-amount" id="monthlyBig">—</div>
+        <div class="monthly-note">※ 毎月一定額を取り崩す場合。実際の運用益は月次変動します。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Helpers ──────────────────────────────────────────────
+function formatYen(v) {
+  if (v >= 100000000) return (v / 100000000).toFixed(1) + '億円';
+  if (v >= 10000) return Math.floor(v / 10000) + '万円';
+  return Math.floor(v) + '円';
+}
+function formatYenFull(v) {
+  v = Math.round(v);
+  if (v >= 100000000) {
+    const oku = Math.floor(v / 100000000);
+    const man = Math.floor((v % 100000000) / 10000);
+    return man > 0 ? oku + '億' + man + '万円' : oku + '億円';
+  }
+  if (v >= 10000) {
+    const man = Math.floor(v / 10000);
+    const rem = Math.floor(v % 10000);
+    return rem > 0 ? man + '万' + rem + '円' : man + '万円';
+  }
+  return Math.floor(v) + '円';
+}
+function clamp(v, lo, hi) { return Math.min(Math.max(v, lo), hi); }
+
+// ── State ─────────────────────────────────────────────────
+let principal = 30000000;
+let annualReturn = 6;
+let drawdownRate = 4;
+
+// ── Chart ─────────────────────────────────────────────────
+const ctx = document.getElementById('myChart').getContext('2d');
+const chart = new Chart(ctx, {
+  type: 'line',
+  data: { labels: [], datasets: [{
+    data: [],
+    borderColor: '#d4af37',
+    borderWidth: 2.5,
+    pointRadius: 0,
+    pointHoverRadius: 5,
+    fill: true,
+    backgroundColor: (context) => {
+      const gradient = context.chart.ctx.createLinearGradient(0, 0, 0, context.chart.height);
+      gradient.addColorStop(0, 'rgba(212,175,55,0.35)');
+      gradient.addColorStop(1, 'rgba(212,175,55,0.02)');
+      return gradient;
+    },
+    tension: 0.4,
+  }]},
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: 'rgba(10,15,28,0.95)',
+        borderColor: 'rgba(212,175,55,0.4)',
+        borderWidth: 1,
+        titleColor: '#a0aec0',
+        bodyColor: '#d4af37',
+        bodyFont: { family: 'monospace', size: 15, weight: 'bold' },
+        titleFont: { family: 'Noto Sans JP', size: 13 },
+        padding: 12,
+        callbacks: {
+          title: items => items[0].label + '年後',
+          label: item => formatYenFull(item.raw),
+        }
+      }
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(255,255,255,0.05)' },
+        ticks: { color: '#718096', font: { family: 'monospace', size: 12 },
+          callback: v => v + '年' },
+      },
+      y: {
+        grid: { color: 'rgba(255,255,255,0.05)' },
+        ticks: { color: '#718096', font: { family: 'monospace', size: 12 },
+          callback: v => formatYen(v) },
+      }
+    }
+  }
+});
+
+// ── Simulate ──────────────────────────────────────────────
+function simulate() {
+  const monthlyRate = annualReturn / 100 / 12;
+  const monthlyDraw = principal * (drawdownRate / 100) / 12;
+  let balance = principal;
+  const labels = ['0'];
+  const values = [balance];
+  let depletionYear = null;
+
+  for (let y = 1; y <= 50; y++) {
+    for (let m = 0; m < 12; m++) {
+      balance = balance * (1 + monthlyRate) - monthlyDraw;
+      if (balance < 0) balance = 0;
+    }
+    labels.push(String(y));
+    values.push(Math.round(balance));
+    if (balance === 0 && depletionYear === null) depletionYear = y;
+  }
+
+  const isSustainable = !depletionYear;
+  const finalAsset = values[values.length - 1];
+  const color = isSustainable ? '#d4af37' : '#fc8181';
+
+  // Update chart
+  chart.data.labels = labels;
+  chart.data.datasets[0].data = values;
+  chart.data.datasets[0].borderColor = color;
+  chart.data.datasets[0].backgroundColor = (context) => {
+    const gradient = context.chart.ctx.createLinearGradient(0, 0, 0, context.chart.height);
+    gradient.addColorStop(0, isSustainable ? 'rgba(212,175,55,0.35)' : 'rgba(252,129,129,0.35)');
+    gradient.addColorStop(1, isSustainable ? 'rgba(212,175,55,0.02)' : 'rgba(252,129,129,0.02)');
+    return gradient;
+  };
+  chart.data.datasets[0].pointHoverBackgroundColor = color;
+
+  // Remove old depletion annotation if any
+  if (chart.options.plugins.annotation) {
+    chart.options.plugins.annotation.annotations = {};
+  }
+
+  chart.update('none');
+
+  // Summary cards
+  document.getElementById('annualDrawCard').textContent = formatYen(principal * drawdownRate / 100);
+  document.getElementById('monthlyCard').textContent = formatYen(monthlyDraw);
+  document.getElementById('monthlyBig').textContent = formatYenFull(monthlyDraw) + ' / 月';
+
+  // Status
+  const badge = document.getElementById('statusBadge');
+  document.getElementById('statusIcon').textContent = isSustainable ? '🌱' : '🔥';
+  document.getElementById('statusText').textContent = isSustainable
+    ? '50年後も ' + formatYen(finalAsset) + ' 残存'
+    : depletionYear + '年後に資産枯渇';
+  badge.style.background = isSustainable ? 'rgba(104,211,145,0.1)' : 'rgba(252,129,129,0.1)';
+  badge.style.border = '1px solid ' + (isSustainable ? 'rgba(104,211,145,0.3)' : 'rgba(252,129,129,0.3)');
+  document.getElementById('statusText').style.color = isSustainable ? '#68d391' : '#fc8181';
+
+  // Milestones
+  const grid = document.getElementById('milestoneGrid');
+  grid.innerHTML = '';
+  [5, 10, 15, 20, 25, 30].forEach(yr => {
+    const val = values[yr] ?? 0;
+    const alive = val > 0;
+    const pct = principal > 0 ? Math.round((val / principal) * 100) : 0;
+    const pctColor = pct >= 100 ? '#68d391' : pct >= 50 ? '#d4af37' : '#fc8181';
+    const card = document.createElement('div');
+    card.className = 'milestone-card';
+    card.style.background = alive ? 'rgba(255,255,255,0.04)' : 'rgba(252,129,129,0.05)';
+    card.style.border = '1px solid ' + (alive ? 'rgba(255,255,255,0.08)' : 'rgba(252,129,129,0.2)');
+    card.innerHTML = `
+      <div class="milestone-year">${yr}年後</div>
+      <div class="milestone-amount" style="color:${alive ? '#e2e8f0' : '#fc8181'}">${alive ? formatYen(val) : '枯渇'}</div>
+      ${alive ? `<div class="milestone-pct" style="color:${pctColor}">元本比 ${pct}%</div>` : ''}
+    `;
+    grid.appendChild(card);
+  });
+}
+
+// ── Principal ─────────────────────────────────────────────
+function getPrincipal() {
+  const raw = parseFloat(document.getElementById('principalInput').value) || 0;
+  const unit = document.getElementById('unitSelect').value;
+  if (unit === 'oku') return raw * 100000000;
+  if (unit === 'man') return raw * 10000;
+  return raw;
+}
+function updatePrincipalSub() {
+  principal = getPrincipal();
+  document.getElementById('principalSub').textContent = '= ' + formatYenFull(principal);
+  simulate();
+}
+document.getElementById('principalInput').addEventListener('input', updatePrincipalSub);
+document.getElementById('unitSelect').addEventListener('change', updatePrincipalSub);
+
+// ── Rate helpers ──────────────────────────────────────────
+function syncSlider(sliderId, val, min, max, color) {
+  const slider = document.getElementById(sliderId);
+  slider.value = val;
+  const pct = ((val - min) / (max - min)) * 100;
+  slider.style.background = `linear-gradient(to right, ${color} ${pct}%, rgba(255,255,255,0.1) 0%)`;
+}
+
+// Annual Return
+document.getElementById('returnSlider').addEventListener('input', e => {
+  const v = parseFloat(e.target.value);
+  annualReturn = v;
+  document.getElementById('returnNumInput').value = v;
+  syncSlider('returnSlider', v, 0, 15, '#68d391');
+  simulate();
+});
+document.getElementById('returnNumInput').addEventListener('input', e => {
+  const v = parseFloat(e.target.value);
+  if (!isNaN(v) && v >= 0 && v <= 15) {
+    annualReturn = v;
+    syncSlider('returnSlider', v, 0, 15, '#68d391');
+    simulate();
+  }
+});
+document.getElementById('returnNumInput').addEventListener('blur', e => {
+  let v = parseFloat(e.target.value);
+  if (isNaN(v)) v = 0;
+  v = clamp(parseFloat(v.toFixed(1)), 0, 15);
+  annualReturn = v;
+  e.target.value = v;
+  syncSlider('returnSlider', v, 0, 15, '#68d391');
+  simulate();
+});
+
+// Drawdown Rate
+document.getElementById('drawdownSlider').addEventListener('input', e => {
+  const v = parseFloat(e.target.value);
+  drawdownRate = v;
+  document.getElementById('drawdownNumInput').value = v;
+  syncSlider('drawdownSlider', v, 0.1, 20, '#fc8181');
+  simulate();
+});
+document.getElementById('drawdownNumInput').addEventListener('input', e => {
+  const v = parseFloat(e.target.value);
+  if (!isNaN(v) && v >= 0.1 && v <= 20) {
+    drawdownRate = v;
+    syncSlider('drawdownSlider', v, 0.1, 20, '#fc8181');
+    simulate();
+  }
+});
+document.getElementById('drawdownNumInput').addEventListener('blur', e => {
+  let v = parseFloat(e.target.value);
+  if (isNaN(v) || v < 0.1) v = 0.1;
+  v = clamp(parseFloat(v.toFixed(1)), 0.1, 20);
+  drawdownRate = v;
+  e.target.value = v;
+  syncSlider('drawdownSlider', v, 0.1, 20, '#fc8181');
+  simulate();
+});
+
+// ── Init ──────────────────────────────────────────────────
+simulate();
+</script>
+</body>
+</html>
