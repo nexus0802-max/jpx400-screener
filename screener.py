@@ -16,8 +16,47 @@ import numpy as np
 import json
 import math
 import argparse
+import sys
+import time
+import random
 from datetime import datetime, timezone, timedelta
 import os
+
+# 2026-08-26以降、GitHub Actions実行環境からのYahoo Finance取得が
+# ほぼ全銘柄で失敗し（yfinanceのバージョンアップに伴うcookie/crumb認証の
+# 強制化＋クラウド/CI系IPに対するYahoo側のレート制限強化が原因と推定）、
+# 取得件数0件でmain()内のpandas処理がKeyErrorで異常終了 → docs/data.jsonが
+# 再生成されないままGitHub Pagesが直前の成功データを配信し続ける、という
+# 障害が発生した。以下の対策を追加する：
+#   1) yf.download / Ticker.infoにリトライ＋指数バックオフを追加
+#   2) 銘柄間に待機を挟みレート制限に当たりにくくする
+#   3) 取得成功率が閾値を下回ったら docs/data.json を書き換えずに
+#      明示的に異常終了させる（CIが赤くなり気付ける状態にする。
+#      サイレントに古いデータのまま固まるのを防ぐ）
+MIN_FETCH_SUCCESS_RATE = 0.5  # これを下回ったら異常終了して前回データを保持する
+YF_MAX_RETRIES = 4
+YF_RETRY_BASE_DELAY_SEC = 5
+INTER_TICKER_SLEEP_SEC = 1.2  # 連続リクエストによるレート制限回避用
+
+
+def _with_retry(fn, *, what, max_retries=YF_MAX_RETRIES, base_delay=YF_RETRY_BASE_DELAY_SEC):
+    """yfinance呼び出し用の指数バックオフ＋ジッター付きリトライ。
+    YFRateLimitError等の具体的な例外クラスはyfinanceのバージョンによって
+    名前・場所が変わるため、あえてException全般を対象にする。"""
+    last_err = None
+    for attempt in range(1, max_retries + 1):
+        try:
+            return fn()
+        except Exception as e:
+            last_err = e
+            if attempt == max_retries:
+                break
+            delay = base_delay * (2 ** (attempt - 1)) + random.uniform(0, base_delay)
+            print(f"  [retry] {what}: {type(e).__name__}: {e} "
+                  f"-> {attempt}/{max_retries}回目失敗、{delay:.1f}秒待って再試行")
+            time.sleep(delay)
+    print(f"  [failed] {what}: {max_retries}回リトライしても失敗: {last_err}")
+    return None
 
 # TOPIX連動ETF（"^TOPX"の指数シンボルはyfinanceでの取得安定性に懸念があるため、
 # 流動性が高く通常の株価と同じ経路で確実に取得できるETFをベンチマークの代理として使う）
@@ -398,24 +437,22 @@ FUND_KEYS = ["trailing_pe", "price_to_book", "roe", "profit_margin",
              "revenue_growth", "earnings_growth"]
 
 def fetch_fundamentals(ticker):
-    try:
-        t = f"{ticker}.T"
-        info = yf.Ticker(t).info
-        pe = info.get("trailingPE")
-        if pe is not None and pe <= 0:
-            pe = None
-        return {
-            "company_name": info.get("shortName") or info.get("longName"),
-            "trailing_pe": pe,
-            "price_to_book": info.get("priceToBook"),
-            "roe": info.get("returnOnEquity"),
-            "profit_margin": info.get("profitMargins"),
-            "revenue_growth": info.get("revenueGrowth"),
-            "earnings_growth": info.get("earningsGrowth"),
-        }
-    except Exception as e:
-        print(f"  ファンダ取得エラー: {ticker} - {e}")
+    t = f"{ticker}.T"
+    info = _with_retry(lambda: yf.Ticker(t).info, what=f"ファンダ取得 {ticker}")
+    if not info:
         return {"company_name": None, **{k: None for k in FUND_KEYS}}
+    pe = info.get("trailingPE")
+    if pe is not None and pe <= 0:
+        pe = None
+    return {
+        "company_name": info.get("shortName") or info.get("longName"),
+        "trailing_pe": pe,
+        "price_to_book": info.get("priceToBook"),
+        "roe": info.get("returnOnEquity"),
+        "profit_margin": info.get("profitMargins"),
+        "revenue_growth": info.get("revenueGrowth"),
+        "earnings_growth": info.get("earningsGrowth"),
+    }
 
 
 def compute_fund_scores(records, weights=(0.30, 0.40, 0.30)):
@@ -471,20 +508,19 @@ def calc_weighted_return(closes, w=(0.4, 0.2, 0.2, 0.2)):
 def fetch_benchmark_data():
     """TOPIX連動ETFのOHLCVを取得。加重リターン計算だけでなく地合い判定にも使うため、
     Closeだけでなく高値・安値も含めて2年分取得する。"""
-    try:
-        df = yf.download(BENCHMARK_TICKER, period="2y", progress=False, auto_adjust=True)
-        if df is None or len(df) < 260:
-            print(f"  ベンチマーク({BENCHMARK_TICKER})のデータが不足しています")
-            return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        df = df.dropna(subset=["Close"])
-        if len(df) < 260:
-            return None
-        return df
-    except Exception as e:
-        print(f"  ベンチマーク取得エラー: {e}")
+    df = _with_retry(
+        lambda: yf.download(BENCHMARK_TICKER, period="2y", progress=False, auto_adjust=True),
+        what=f"ベンチマーク({BENCHMARK_TICKER})取得",
+    )
+    if df is None or len(df) < 260:
+        print(f"  ベンチマーク({BENCHMARK_TICKER})のデータが不足しています")
         return None
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df.dropna(subset=["Close"])
+    if len(df) < 260:
+        return None
+    return df
 
 
 def regime_score(trend_class, above_ma200):
@@ -612,7 +648,10 @@ def calc_momentum_63d(closes):
 def fetch_and_analyze(ticker, ema_fast=DEFAULT_DAILY_EMA_FAST, ema_slow=DEFAULT_DAILY_EMA_SLOW):
     try:
         t = f"{ticker}.T"
-        df = yf.download(t, period="10y", progress=False, auto_adjust=True)
+        df = _with_retry(
+            lambda: yf.download(t, period="10y", progress=False, auto_adjust=True),
+            what=f"株価取得 {ticker}",
+        )
         if df is None or len(df) < 100:
             return None
         if isinstance(df.columns, pd.MultiIndex):
@@ -963,6 +1002,18 @@ def main(ema_fast=DEFAULT_DAILY_EMA_FAST, ema_slow=DEFAULT_DAILY_EMA_SLOW):
                   f"PER={result.get('trailing_pe')} 加重リターン={result.get('weighted_return')}")
         else:
             print(f"  -> スキップ")
+        # 連続リクエストによるYahoo Finance側のレート制限を避けるための小休止
+        time.sleep(INTER_TICKER_SLEEP_SEC)
+
+    success_rate = len(all_results) / total if total else 0
+    print(f"取得成功率: {len(all_results)}/{total} ({success_rate:.0%})")
+    if success_rate < MIN_FETCH_SUCCESS_RATE:
+        print(
+            f"[FATAL] 取得成功率が閾値({MIN_FETCH_SUCCESS_RATE:.0%})を下回りました。"
+            f"Yahoo Financeからのブロック/レート制限や、yfinanceの仕様変更が疑われます。"
+            f"docs/data.jsonは書き換えずに異常終了します（直前の正常なデータを保持）。"
+        )
+        sys.exit(1)
 
     print("ファンダ複合スコアを計算中...")
     all_results = compute_fund_scores(all_results)
